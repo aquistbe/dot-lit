@@ -4,7 +4,7 @@ on:
     tags: ["v*"]
 permissions:
   contents: write
-  id-token: write
+  actions: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,20 +14,14 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv build
-      - uses: actions/upload-artifact@v4
-        with: { name: dist, path: dist/ }
       - name: Create GitHub release with wheel + sdist
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
-  publish:
-    # PyPI trusted publishing must be registered for THIS file (release.yml) as well as
-    # publish.yml (manual dispatch): PyPI matches the top-level workflow, so a reusable
-    # workflow does not inherit the caller's registration.
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: dist/ }
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Dispatch the PyPI publish workflow on this tag
+        # PyPI trusted publishing is registered for publish.yml only, and PyPI does not accept
+        # reusable-workflow tokens, so publish.yml must run as its own top-level workflow.
+        # workflow_dispatch is one of the two events GITHUB_TOKEN may trigger.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run publish.yml --ref "$GITHUB_REF_NAME"

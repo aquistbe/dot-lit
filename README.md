@@ -150,10 +150,11 @@ uv tool install "transport-lit[semantic]"    # with the bundled embedding backen
 ```
 
 Published at <https://pypi.org/project/transport-lit/> through GitHub's trusted publishing:
-a tag runs `release.yml` (build, GitHub release, then a publish job gated by the maintainer's
-approval on the `pypi` environment); `publish.yml` is the manual fallback. Both filenames
-are registered as trusted publishers on PyPI — PyPI matches the top-level workflow file, so
-a reusable workflow does not inherit its caller's registration. `server.json` is the manifest for the
+a tag runs `release.yml` (build, GitHub release), which then dispatches `publish.yml` — the
+one workflow registered as a trusted publisher — where the upload waits for the maintainer's
+approval on the `pypi` environment. PyPI rejects tokens from reusable workflows and matches
+the top-level workflow file, which is why publishing is a separate dispatched workflow
+rather than a job inside the release. `server.json` is the manifest for the
 MCP Registry (`registry.modelcontextprotocol.io`), to submit after the PyPI package exists.
 
 ### Pinned versions
