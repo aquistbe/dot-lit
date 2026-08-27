@@ -136,14 +136,17 @@ Restart Claude Desktop afterwards. For Claude Code: `claude mcp add transport-li
 
 No credentials are used or stored anywhere; every request goes to public endpoints.
 
-### Install without cloning (PyPI)
+### Install from PyPI (no clone)
 
-Once published, `uv tool install transport-lit` / `uvx --from transport-lit transport-lit-mcp` run it straight
-from PyPI (the wheel is verified with `twine check` and a clean-venv install in CI). To arm
-publishing, the maintainer does this once on pypi.org: **Account → Publishing → Add a new
-pending publisher** with project `transport-lit`, owner `aquistbe`, repository `transport-lit`, workflow
-`publish.yml`, environment `pypi`. The next GitHub Release (or a manual run of the
-*publish-pypi* workflow) then uploads automatically; no API token is stored anywhere. `server.json` is the manifest for the
+```bash
+uv tool install transport-lit            # CLI + MCP server on PATH
+uvx --from transport-lit transport-lit-mcp   # or run the server ad hoc
+uv tool install "transport-lit[semantic]"    # with the bundled embedding backend
+```
+
+Published at <https://pypi.org/project/transport-lit/> through GitHub's trusted publishing:
+every GitHub Release runs `publish.yml`, which waits for the maintainer's approval on the
+`pypi` environment and uploads without any stored token. `server.json` is the manifest for the
 MCP Registry (`registry.modelcontextprotocol.io`), to submit after the PyPI package exists.
 
 ### Pinned versions
@@ -156,8 +159,9 @@ installs with `uv sync --frozen`, so a release always runs against the exact ver
 tested with. To install a specific version:
 
 ```bash
-uv tool install git+https://github.com/aquistbe/transport-lit@v0.1.0
-uv tool upgrade transport-lit          # later, to move to whatever main points at
+uv tool install "transport-lit==0.3.0"                            # a pinned PyPI release
+uv tool install git+https://github.com/aquistbe/transport-lit@v0.3.0  # or the matching git tag
+uv tool upgrade transport-lit                                     # move to the latest release
 ```
 
 ## Harvesting
