@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__, config
 from .harvest import harvest, harvest_fresh, make_client, reindex, status
+from .sources import SOURCES, get_source
 from .store import Store
 
 
@@ -33,19 +34,30 @@ def cmd_probe(_: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sources(_: argparse.Namespace) -> int:
+    for k, src in SOURCES.items():
+        print(f"{k:8s} {src.name}\n         {src.base_url}  set={src.set_spec or '-'}  filter={'yes' if src.include else 'no'}  {src.notes}")
+    return 0
+
+
 def cmd_harvest(a: argparse.Namespace) -> int:
+    keys = list(SOURCES) if a.source == "all" else [a.source]
     s = _store()
+    results = []
     try:
         say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
-        if a.fresh:
-            res = harvest_fresh(s, progress=say)
-        else:
-            res = harvest(s, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
-                          max_pages=a.max_pages, progress=say)
+        for k in keys:
+            src = get_source(k)
+            if a.fresh:
+                res = harvest_fresh(s, source=src, progress=say)
+            else:
+                res = harvest(s, source=src, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
+                              max_pages=a.max_pages, progress=say)
+            results.append(res.__dict__ | {"source": k})
     finally:
         s.close()
-    print(json.dumps(res.__dict__, indent=2))
-    return 0 if res.status == "complete" else 1
+    print(json.dumps(results if len(results) > 1 else results[0], indent=2))
+    return 0 if all(r["status"] == "complete" for r in results) else 1
 
 
 def cmd_import(a: argparse.Namespace) -> int:
@@ -63,10 +75,10 @@ def cmd_import(a: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_reindex(_: argparse.Namespace) -> int:
+def cmd_reindex(a: argparse.Namespace) -> int:
     s = _store()
     try:
-        res = reindex(s, progress=lambda m: print(m, file=sys.stderr, flush=True))
+        res = reindex(s, source=get_source(a.source), progress=lambda m: print(m, file=sys.stderr, flush=True))
     finally:
         s.close()
     print(json.dumps(res, indent=2))
@@ -239,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("probe", help="query Identify/ListMetadataFormats/ListSets live").set_defaults(fn=cmd_probe)
 
-    h = sub.add_parser("harvest", help="harvest ROSA-P into the local index")
+    sub.add_parser("sources", help="list configured OAI-PMH sources").set_defaults(fn=cmd_sources)
+
+    h = sub.add_parser("harvest", help="harvest a source (default rosap) into the local index")
+    h.add_argument("--source", default="rosap", help="source key from `dot-lit sources`, or 'all'")
     h.add_argument("--mode", choices=["auto", "full", "incremental"], default="auto")
     h.add_argument("--from", dest="from", help="OAI from= (YYYY-MM-DDThh:mm:ssZ); overrides mode")
     h.add_argument("--until", help="OAI until= (YYYY-MM-DDThh:mm:ssZ)")
@@ -253,7 +268,9 @@ def main(argv: list[str] | None = None) -> int:
     im.add_argument("--source", default="import", help="id prefix for records without a TRID URL (default: import)")
     im.add_argument("--collection", help="collection label for the imported records (default: file name)")
     im.set_defaults(fn=cmd_import)
-    sub.add_parser("reindex", help="re-parse cached raw OAI pages into the index (no network)").set_defaults(fn=cmd_reindex)
+    ri = sub.add_parser("reindex", help="re-parse cached raw OAI pages into the index (no network)")
+    ri.add_argument("--source", default="rosap")
+    ri.set_defaults(fn=cmd_reindex)
     sub.add_parser("status", help="record counts, last harvest, coverage by year").set_defaults(fn=cmd_status)
 
     q = sub.add_parser("search", help="search the local index")

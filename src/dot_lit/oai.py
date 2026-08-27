@@ -205,6 +205,7 @@ class OAIClient:
         *,
         from_: str | None = None,
         until: str | None = None,
+        set_spec: str | None = None,
         token: str | None = None,
         raw_label: str | None = None,
     ) -> ListPage:
@@ -216,6 +217,8 @@ class OAIClient:
                 params["from"] = from_
             if until:
                 params["until"] = until
+            if set_spec:
+                params["set"] = set_spec
         content = self._get(params)
         if raw_label:
             self._save_raw(raw_label, content)

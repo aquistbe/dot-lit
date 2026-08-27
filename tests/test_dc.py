@@ -77,3 +77,50 @@ def test_year_fallback_rejects_report_numbers_and_implausible_years():
         "<dc:description>Final report; June 2007</dc:description>", "<dc:description>2009</dc:description>")
     d = parse_record(ET.fromstring(y))
     assert d["year"] == 2009 and d["year_source"] == "description"
+
+
+DSPACE = """<record xmlns="http://www.openarchives.org/OAI/2.0/">
+<header><identifier>oai:openknowledge.worldbank.org:10986/3284</identifier><datestamp>2026-04-01T11:46:55Z</datestamp>
+<setSpec>com_10986_8</setSpec><setSpec>innovation_policy</setSpec></header>
+<metadata><oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title>Road Safety in Low-Income Countries</dc:title>
+<dc:creator>Doe, Jane</dc:creator>
+<dc:date>2012-03-19T17:29:42Z</dc:date><dc:date>2012-03-19T17:29:42Z</dc:date><dc:date>2011-03</dc:date>
+<dc:identifier>http://www-wds.worldbank.org/external/x</dc:identifier>
+<dc:identifier>https://hdl.handle.net/10986/3284</dc:identifier>
+<dc:identifier>10.1596/1813-9450-5996</dc:identifier>
+<dc:identifier>https://openknowledge.worldbank.org/bitstreams/abc/download.pdf</dc:identifier>
+<dc:description>Pedestrian deaths dominate.</dc:description>
+</oai_dc:dc></metadata></record>"""
+
+
+def test_parse_dspace_record_for_other_source():
+    d = parse_record(ET.fromstring(DSPACE), "wbokr", "World Bank OKR")
+    assert d["id"] == "wbokr:10986/3284"
+    assert d["year"] == 2011 and d["year_source"] == "date" and d["date_raw"] == "2011-03"
+    assert d["landing_url"] == "https://hdl.handle.net/10986/3284"
+    assert d["doi"] == "10.1596/1813-9450-5996"
+    assert "https://openknowledge.worldbank.org/bitstreams/abc/download.pdf" in d["other_urls"]
+    assert d["collections"] == ["World Bank OKR", "wbokr:innovation_policy"]
+    assert d["abstract"] == "Pedestrian deaths dominate."
+
+
+def test_transport_filter():
+    from dot_lit.sources import SOURCES, matches_filter
+    wb = SOURCES["wbokr"]
+    assert matches_filter(wb, {"title": "Seguridad vial en ciudades", "subjects": [], "abstract": ""})
+    assert matches_filter(wb, {"title": "Growth", "subjects": ["Roads"], "abstract": ""})
+    assert not matches_filter(wb, {"title": "Monetary policy and inflation", "subjects": ["Banking"], "abstract": "Roadmap for reform."})
+    assert matches_filter(SOURCES["vti"], {"title": "anything", "subjects": [], "abstract": ""})
+
+
+def test_fedora_system_objects_are_skipped():
+    x = SAMPLE.replace("oai:dot.stacks:dot:93144", "oai:dot.stacks:fedora-system:ContentModel-3.0")
+    assert parse_record(ET.fromstring(x)) is None
+
+
+def test_granularity_formatting():
+    from dot_lit.harvest import _fmt_for
+    assert _fmt_for("2026-08-27T01:12:19Z", "YYYY-MM-DD") == "2026-08-27"
+    assert _fmt_for("2026-08-27T01:12:19Z", "YYYY-MM-DDThh:mm:ssZ") == "2026-08-27T01:12:19Z"
+    assert _fmt_for(None, "YYYY-MM-DD") is None

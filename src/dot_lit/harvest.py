@@ -38,11 +38,12 @@ from datetime import datetime, timedelta, timezone
 from . import config
 from .dc import OAI_NS, parse_record
 from .oai import BadResumptionToken, NoRecordsMatch, OAIClient, TransportError, TruncatedList
+from .sources import SOURCES, Source, matches_filter
 from .store import Store, utcnow
 
 log = logging.getLogger(__name__)
 
-SOURCE = "rosap"
+SOURCE = "rosap"  # default source key (kept for backwards compatibility)
 OVERLAP = timedelta(hours=1)
 MAX_RESUMPTIONS = 8
 
@@ -69,9 +70,20 @@ def _parse_ts(s: str) -> datetime:
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def make_client() -> OAIClient:
+def _fmt_for(ts: str | None, granularity: str) -> str | None:
+    """Format an ISO timestamp for a repository's declared OAI granularity.
+    OPUS (BASt) accepts only YYYY-MM-DD; ROSA-P/DSpace/DiVA accept full timestamps."""
+    if not ts:
+        return ts
+    if granularity.startswith("YYYY-MM-DDThh"):
+        return ts
+    return ts[:10]
+
+
+def make_client(source: Source | None = None) -> OAIClient:
+    source = source or SOURCES["rosap"]
     return OAIClient(
-        config.ROSAP_OAI_BASE,
+        source.base_url,
         config.USER_AGENT,
         min_interval=config.MIN_REQUEST_INTERVAL,
         timeout=config.HTTP_TIMEOUT,
@@ -83,6 +95,7 @@ def harvest(
     store: Store,
     client: OAIClient | None = None,
     *,
+    source: Source | None = None,
     mode: str = "auto",
     from_ts: str | None = None,
     until_ts: str | None = None,
@@ -90,13 +103,14 @@ def harvest(
     progress: Callable[[str], None] | None = None,
 ) -> HarvestResult:
     say = progress or (lambda m: log.info(m))
+    source = source or SOURCES["rosap"]
     own_client = client is None
-    client = client or make_client()
+    client = client or make_client(source)
     config.ensure_dirs()
 
     # ---- decide window -------------------------------------------------------------
-    last_full = store.last_complete_run(SOURCE, "full")
-    last_any = store.last_complete_run(SOURCE)
+    last_full = store.last_complete_run(source.key, "full")
+    last_any = store.last_complete_run(source.key)
     if mode == "auto":
         mode = "incremental" if last_full else "full"
     if mode == "incremental":
@@ -109,29 +123,46 @@ def harvest(
     else:
         raise ValueError(f"unknown mode {mode!r}")
     until_ts = until_ts or utcnow()
+    try:
+        granularity = client.identify().get("granularity", "YYYY-MM-DDThh:mm:ssZ")
+    except Exception as exc:  # noqa: BLE001 — Identify failing is not fatal; assume full timestamps
+        log.warning("Identify failed for %s (%s); assuming second granularity", source.key, exc)
+        granularity = "YYYY-MM-DDThh:mm:ssZ"
+    if not granularity.startswith("YYYY-MM-DDThh"):
+        # day granularity: widen the window by a day on both ends so nothing is missed
+        if from_ts:
+            from_ts = _ts(_parse_ts(from_ts) - timedelta(days=1))
+        until_ts = _ts(_parse_ts(until_ts) + timedelta(days=1))
+    q_from, q_until = _fmt_for(from_ts, granularity), _fmt_for(until_ts, granularity)
 
-    run_id = store.start_run(SOURCE, mode, from_ts, until_ts)
+    run_id = store.start_run(source.key, mode, from_ts, until_ts)
     notes: list[str] = []
     seen = 0
+    kept = 0
+    skipped = 0
     pages = 0
     resumptions = 0
     min_datestamp: str | None = None
     ordering_ok = True
     token: str | None = None
-    effective_until = until_ts
+    effective_until = q_until
     if not config.CONTACT_EMAIL:
         say("warning: DOT_LIT_CONTACT is not set; set it to your e-mail so the repository can reach you (good OAI-PMH citizenship)")
-    say(f"run {run_id}: {mode} harvest from={from_ts or '-'} until={until_ts} (page size 100, {config.MIN_REQUEST_INTERVAL}s pacing)")
+    say(f"run {run_id}: {source.key} {mode} harvest from={from_ts or '-'} until={until_ts} set={source.set_spec or '-'} ({config.MIN_REQUEST_INTERVAL}s pacing)")
 
     def finish(status: str) -> HarvestResult:
         fin = utcnow()
+        if source.include is not None:
+            notes.append(f"filter kept {kept} of {seen} records ({skipped} skipped as off-topic)")
         store.update_run(run_id, status=status, finished_at=fin, pages=pages, records_seen=seen,
                          resumptions=resumptions, min_datestamp=min_datestamp, notes=notes)
         if status == "complete":
-            store.set_meta("last_harvest_finished_at", fin)
-            store.set_meta("last_harvest_run_id", str(run_id))
+            store.set_meta(f"last_harvest_finished_at:{source.key}", fin)
+            if source.key == "rosap":
+                store.set_meta("last_harvest_finished_at", fin)
+                store.set_meta("last_harvest_run_id", str(run_id))
             if mode == "full":
-                store.set_meta("last_full_harvest_finished_at", fin)
+                store.set_meta(f"last_full_harvest_finished_at:{source.key}", fin)
         run = store.get_run(run_id) or {}
         return HarvestResult(run_id, mode, status, seen, pages, resumptions, notes,
                              run.get("started_at", ""), fin, store.count())
@@ -141,8 +172,8 @@ def harvest(
             label = f"run{run_id}-p{pages:05d}"
             try:
                 page = client.list_records_page(
-                    config.ROSAP_METADATA_PREFIX, from_=from_ts, until=effective_until,
-                    token=token, raw_label=label,
+                    source.metadata_prefix, from_=q_from, until=effective_until,
+                    set_spec=source.set_spec, token=token, raw_label=label,
                 )
             except NoRecordsMatch:
                 if pages == 0:
@@ -157,27 +188,33 @@ def harvest(
                     return finish("failed")
                 resumptions += 1
                 if ordering_ok and min_datestamp:
-                    effective_until = min_datestamp
+                    effective_until = _fmt_for(min_datestamp, granularity)
                     notes.append(f"{type(exc).__name__} at page {pages}; resumed with until={effective_until}")
                     say(f"{type(exc).__name__}: resuming from datestamp boundary {effective_until} (resumption {resumptions})")
                 else:
-                    effective_until = until_ts
+                    effective_until = q_until
                     notes.append(f"{type(exc).__name__} at page {pages}; restarted from top (ordering not monotone)")
                     say(f"{type(exc).__name__}: restarting list from the top (resumption {resumptions})")
                 token = None
                 continue
 
             # ---- cursor cross-check (only meaningful on a single uninterrupted list) ----
-            if page.cursor is not None and resumptions == 0 and page.cursor != seen:
+            # DiVA reports the cursor *after* the page; others report the page start.
+            if page.cursor is not None and resumptions == 0 and page.cursor not in (seen, seen + len(page.records)):
                 notes.append(f"cursor mismatch on page {pages}: server cursor={page.cursor}, local count={seen}")
 
             parsed = []
             page_max: str | None = None
             page_min: str | None = None
             for rec in page.records:
-                d = parse_record(rec)
+                d = parse_record(rec, source.key, source.collection)
                 if not d:
                     continue
+                seen += 1
+                if not d.get("deleted") and not matches_filter(source, d):
+                    skipped += 1
+                    continue
+                kept += 1
                 parsed.append(d)
                 ds = d["datestamp"]
                 page_max = ds if page_max is None or ds > page_max else page_max
@@ -191,7 +228,6 @@ def harvest(
                 min_datestamp = page_min
 
             n = store.upsert_records(parsed)
-            seen += len(parsed)
             pages += 1
             token = page.token
             if pages % 10 == 0 or token is None:
@@ -216,28 +252,29 @@ def harvest(
     except KeyboardInterrupt:
         notes.append("interrupted by user")
         return finish("failed")
-    except Exception as exc:  # noqa: BLE001 — record and re-raise so status is accurate
+    except Exception as exc:  # noqa: BLE001 — record it; the run is failed, not crashed
         notes.append(f"unexpected error: {exc!r}")
-        finish("failed")
-        raise
+        say(f"FAILED: {exc}")
+        return finish("failed")
     finally:
         if own_client:
             client.close()
 
 
-def harvest_fresh(store: Store, *, progress: Callable[[str], None] | None = None) -> HarvestResult:
+def harvest_fresh(store: Store, *, source: Source | None = None, progress: Callable[[str], None] | None = None) -> HarvestResult:
     """True rebuild: full-harvest ROSA-P into a temporary store, then atomically swap the
     `dot:` records into the live store.  Records that ROSA-P no longer serves disappear;
     imported sources (e.g. trid:) are untouched; a failed harvest changes nothing."""
     say = progress or (lambda m: log.info(m))
-    tmp_path = store.path.with_name(store.path.stem + ".rebuild.sqlite")
+    source = source or SOURCES["rosap"]
+    tmp_path = store.path.with_name(f"{store.path.stem}.rebuild-{source.key}.sqlite")
     for suffix in ("", "-wal", "-shm"):
         p = tmp_path.with_name(tmp_path.name + suffix)
         if p.exists():
             p.unlink()
     tmp = Store(tmp_path)
     try:
-        res = harvest(tmp, mode="full", progress=say)
+        res = harvest(tmp, source=source, mode="full", progress=say)
         if res.status != "complete":
             say("fresh rebuild aborted: harvest did not complete; live index unchanged")
             return res
@@ -245,12 +282,15 @@ def harvest_fresh(store: Store, *, progress: Callable[[str], None] | None = None
         tmp = None
         other = Store(tmp_path)
         try:
-            n = store.replace_source("dot", other)
+            n = store.replace_source("dot" if source.key == "rosap" else source.key, other)
         finally:
             other.close()
-        store.set_meta("last_harvest_finished_at", res.finished_at)
-        store.set_meta("last_full_harvest_finished_at", res.finished_at)
-        say(f"fresh rebuild swapped in {n} dot: records; store now {store.count()} records")
+        store.set_meta(f"last_harvest_finished_at:{source.key}", res.finished_at)
+        store.set_meta(f"last_full_harvest_finished_at:{source.key}", res.finished_at)
+        if source.key == "rosap":
+            store.set_meta("last_harvest_finished_at", res.finished_at)
+            store.set_meta("last_full_harvest_finished_at", res.finished_at)
+        say(f"fresh rebuild swapped in {n} {source.key} records; store now {store.count()} records")
         res.total_in_store = store.count()
         return res
     finally:
@@ -262,15 +302,16 @@ def harvest_fresh(store: Store, *, progress: Callable[[str], None] | None = None
                 p.unlink()
 
 
-def reindex(store: Store, *, progress: Callable[[str], None] | None = None) -> dict:
+def reindex(store: Store, *, source: Source | None = None, progress: Callable[[str], None] | None = None) -> dict:
     """Re-parse the cached raw OAI pages (last complete full harvest and every complete run
     after it) and upsert them.  Lets the parser evolve without re-harvesting."""
     say = progress or (lambda m: log.info(m))
-    last_full = store.last_complete_run(SOURCE, "full")
+    source = source or SOURCES["rosap"]
+    last_full = store.last_complete_run(source.key, "full")
     if not last_full:
-        raise RuntimeError("no complete full harvest to reindex from")
+        raise RuntimeError(f"no complete full harvest of {source.key} to reindex from")
     runs = [r for r in reversed(store.last_runs(10_000))
-            if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == SOURCE]
+            if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == source.key]
     total = 0
     files_seen = 0
     for run in runs:
@@ -279,7 +320,8 @@ def reindex(store: Store, *, progress: Callable[[str], None] | None = None) -> d
             say(f"warning: run {run['id']} has {len(files)} cached pages but recorded {run['pages']}")
         for f in files:
             root = ET.fromstring(gzip.decompress(f.read_bytes()))
-            recs = [d for d in (parse_record(r) for r in root.findall(f".//{{{OAI_NS}}}record")) if d]
+            recs = [d for d in (parse_record(r, source.key, source.collection) for r in root.findall(f".//{{{OAI_NS}}}record"))
+                    if d and (d.get("deleted") or matches_filter(source, d))]
             store.upsert_records(recs)
             total += len(recs)
             files_seen += 1
@@ -296,8 +338,16 @@ def status(store: Store) -> dict:
     last_full = store.last_complete_run(SOURCE, "full")
     years = store.year_distribution()
     known = {k: v for k, v in years.items() if k != "unknown"}
+    per_source = {}
+    for key, src in SOURCES.items():
+        lc = store.last_complete_run(key)
+        per_source[key] = {
+            "name": src.name, "base_url": src.base_url, "records": store.source_distribution().get("dot" if key == "rosap" else key, 0),
+            "last_complete_run": {k: lc[k] for k in ("id", "kind", "finished_at", "records_seen", "pages", "notes")} if lc else None,
+        }
     return {
         "source": SOURCE,
+        "sources": per_source,
         "oai_base_url": config.ROSAP_OAI_BASE,
         "data_dir": str(config.DATA_DIR),
         "total_records": total,

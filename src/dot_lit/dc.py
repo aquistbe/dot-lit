@@ -69,13 +69,37 @@ def local_id_from_oai(oai_identifier: str) -> str:
     return oai_identifier
 
 
-def parse_record(rec: ET.Element) -> dict[str, Any] | None:
+def _pick_date(values: list[str]) -> str:
+    """DSpace emits accession timestamps next to the issue date; prefer plain dates
+    (YYYY, YYYY-MM, YYYY-MM-DD) and, among those, the shortest."""
+    plain = [v for v in values if "T" not in v and _YEAR_RE.search(v)]
+    if plain:
+        return sorted(plain, key=len)[0]
+    return values[0] if values else ""
+
+
+def _landing_url(source_key: str, numeric_or_id: str, urls: list[str]) -> str:
+    if source_key == "rosap":
+        return f"{ROSAP_VIEW_BASE}{numeric_or_id}"
+    prefer = ("hdl.handle.net", "/handle/", "frontdoor", "diva-portal", "urn.kb.se", "nbn-resolving")
+    for host in prefer:
+        for u in urls:
+            if host in u and not u.lower().endswith(".pdf"):
+                return u
+    for u in urls:
+        if not u.lower().endswith(".pdf"):
+            return u
+    return ""
+
+
+def parse_record(rec: ET.Element, source_key: str = "rosap", collection_label: str = "") -> dict[str, Any] | None:
     header = rec.find(f"{{{OAI_NS}}}header")
     if header is None:
         return None
     oai_id = _clean(header.findtext(f"{{{OAI_NS}}}identifier"))
     datestamp = _clean(header.findtext(f"{{{OAI_NS}}}datestamp"))
     deleted = header.get("status") == "deleted"
+    set_specs = [_clean(e.text) for e in header.findall(f"{{{OAI_NS}}}setSpec") if _clean(e.text)]
 
     raw: dict[str, list[str]] = {}
     dc = rec.find(f"{{{OAI_NS}}}metadata/{{{OAI_DC_NS}}}dc")
@@ -86,8 +110,16 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
             if val:
                 raw.setdefault(name, []).append(val)
 
-    local_id = local_id_from_oai(oai_id)
-    numeric = local_id.split(":")[-1]
+    if source_key == "rosap":
+        local_id = local_id_from_oai(oai_id)
+        if not local_id.startswith("dot:"):
+            return None  # Fedora system objects (oai:dot.stacks:fedora-system:*), not documents
+        numeric = local_id.split(":")[-1]
+    else:
+        # 'oai:<repository>:<local>' -> '<key>:<local>'  (local may contain '/')
+        parts = oai_id.split(":", 2)
+        numeric = parts[2] if len(parts) == 3 else oai_id
+        local_id = f"{source_key}:{numeric}"
 
     def get(name: str) -> list[str]:
         return raw.get(name, [])
@@ -128,7 +160,7 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
     #   (3) a year in a short description line that is not a report number
     #       ("Final report; June 2007" yes, "RC-1600" no).
     # Inferred years must fall in FALLBACK_YEAR_MIN..MAX; `year_source` records the route.
-    date_raw = get("date")[0] if get("date") else ""
+    date_raw = _pick_date(get("date"))
     year: int | None = None
     year_source: str | None = None
     if date_raw:
@@ -180,11 +212,15 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
         report_numbers.append(v)
     report_numbers = _uniq(report_numbers + legacy_report_numbers)
 
-    landing_url = f"{ROSAP_VIEW_BASE}{numeric}"
+    landing_url = _landing_url(source_key, numeric, other_urls)
+    if landing_url and source_key != "rosap":
+        other_urls = [u for u in other_urls if u != landing_url]
 
-    collections: list[str] = []
+    collections: list[str] = [collection_label] if collection_label else []
     for v in get("relation.isPartOf"):
         collections.extend(p for p in _MULTI_SPLIT.split(v) if p)
+    if source_key != "rosap":
+        collections.extend(f"{source_key}:{sp}" for sp in set_specs if not sp.startswith(("com_", "col_")))
     collections = _uniq(collections)
 
     subjects = _uniq(get("subject"))

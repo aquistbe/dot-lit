@@ -24,9 +24,10 @@ log = logging.getLogger(__name__)
 mcp = FastMCP(
     "dot-lit",
     instructions=(
-        "Searchable local index of U.S. DOT grey literature harvested from ROSA-P "
-        "(National Transportation Library, https://rosap.ntl.bts.gov). Covers NHTSA "
-        "'DOT HS' technical reports, FHWA/FRA/FTA/FAA reports, state DOT and UTC research. "
+        "Searchable local index of transportation grey literature. Sources (id prefix): "
+        "ROSA-P / U.S. DOT National Transportation Library (dot:), VTI Sweden (vti:), BASt Germany (bast:), "
+        "World Bank OKR (wbokr:), IPEA Brazil (ipea:), CEPAL (cepal:), plus TRID exports imported by the "
+        "user (trid:). Use the `collection` filter to restrict to one source (e.g. 'VTI', 'BASt', 'World Bank', 'TRID'). "
         "Use search_reports first; use get_report for full metadata; get_fulltext extracts "
         "PDF text. Search is FTS5 over title/abstract/subjects/authors/report numbers: all "
         "terms must match first (match_mode=all_terms), then any-term matches fill the "
