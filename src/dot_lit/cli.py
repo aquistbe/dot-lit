@@ -10,7 +10,8 @@ import sys
 from pathlib import Path
 
 from . import __version__, config
-from .harvest import harvest, harvest_fresh, make_client, reindex, status
+from .apis import API_SOURCES
+from .harvest import harvest, harvest_api, harvest_fresh, harvest_fresh_api, make_client, reindex, reindex_api, status
 from .sources import SOURCES, get_source
 from .store import Store
 
@@ -36,23 +37,29 @@ def cmd_probe(_: argparse.Namespace) -> int:
 
 def cmd_sources(_: argparse.Namespace) -> int:
     for k, src in SOURCES.items():
-        print(f"{k:8s} {src.name}\n         {src.base_url}  set={src.set_spec or '-'}  filter={'yes' if src.include else 'no'}  {src.notes}")
+        print(f"{k:8s} {src.name}\n         OAI-PMH {src.base_url}  set={src.set_spec or '-'}  filter={'yes' if src.include else 'no'}  {src.notes}")
+    for k, src in API_SOURCES.items():
+        print(f"{k:8s} {src.name}\n         API  {src.notes}")
     return 0
 
 
 def cmd_harvest(a: argparse.Namespace) -> int:
-    keys = list(SOURCES) if a.source == "all" else [a.source]
+    keys = list(SOURCES) + list(API_SOURCES) if a.source == "all" else [a.source]
     s = _store()
     results = []
     try:
         say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
         for k in keys:
-            src = get_source(k)
-            if a.fresh:
-                res = harvest_fresh(s, source=src, progress=say)
+            if k in API_SOURCES:
+                api = API_SOURCES[k]
+                res = harvest_fresh_api(s, api, progress=say) if a.fresh else harvest_api(s, api, mode=a.mode, progress=say)
             else:
-                res = harvest(s, source=src, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
-                              max_pages=a.max_pages, progress=say)
+                src = get_source(k)
+                if a.fresh:
+                    res = harvest_fresh(s, source=src, progress=say)
+                else:
+                    res = harvest(s, source=src, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
+                                  max_pages=a.max_pages, progress=say)
             results.append(res.__dict__ | {"source": k})
     finally:
         s.close()
@@ -78,7 +85,11 @@ def cmd_import(a: argparse.Namespace) -> int:
 def cmd_reindex(a: argparse.Namespace) -> int:
     s = _store()
     try:
-        res = reindex(s, source=get_source(a.source), progress=lambda m: print(m, file=sys.stderr, flush=True))
+        say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+        if a.source in API_SOURCES:
+            res = reindex_api(s, API_SOURCES[a.source], progress=say)
+        else:
+            res = reindex(s, source=get_source(a.source), progress=say)
     finally:
         s.close()
     print(json.dumps(res, indent=2))
@@ -142,6 +153,65 @@ def cmd_fulltext(a: argparse.Namespace) -> int:
     print(json.dumps(meta, indent=2), file=sys.stderr)
     print((ft.get("text") or "")[: a.max_chars])
     return 0 if ft.get("status") == "ok" else 1
+
+
+def cmd_digest(a: argparse.Namespace) -> int:
+    """Markdown digest of what entered the index recently — the skeleton of a weekly bulletin."""
+    s = _store()
+    try:
+        d = s.whats_new(a.days, limit=a.limit)
+    finally:
+        s.close()
+    from collections import defaultdict
+    by = defaultdict(list)
+    for r in d["records"]:
+        by[r["id"].split(":")[0]].append(r)
+    names = {"dot": "ROSA-P (U.S. DOT)", "vti": "VTI (Sweden)", "bast": "BASt (Germany)", "wbokr": "World Bank",
+             "ipea": "IPEA (Brazil)", "cepal": "CEPAL", "openalex": "OpenAlex reports", "cinii": "CiNii (Japan)",
+             "pubmed": "PubMed", "trid": "TRID imports"}
+    print(f"# New transport literature, last {a.days} days (since {d['since'][:10]})\n")
+    print("Counts: " + ", ".join(f"{names.get(k, k)} {v}" for k, v in d["counts_by_source"].items()) + "\n")
+    for src, recs in by.items():
+        print(f"## {names.get(src, src)} ({len(recs)})\n")
+        for r in recs:
+            au = ", ".join((r.get("authors") or [])[:3]) + (" et al." if len(r.get("authors") or []) > 3 else "")
+            print(f"- **{r.get('title')}** ({r.get('year') or 'n.d.'}). {au}  \n  {r.get('landing_url')}")
+            if a.abstracts and r.get("abstract"):
+                print(f"  \n  {r['abstract'][:400]}…")
+        print()
+    return 0
+
+
+def cmd_mcp_config(a: argparse.Namespace) -> int:
+    """Print MCP client configuration snippets for common clients."""
+    exe = shutil.which("dot-lit-mcp") or str(Path(sys.argv[0]).resolve().parent / "dot-lit-mcp")
+    env = {"DOT_LIT_DATA_DIR": str(config.DATA_DIR)}
+    if config.CONTACT_EMAIL:
+        env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
+    stdio = {"command": exe, "args": [], "env": env}
+    http = "http://127.0.0.1:8765/mcp"
+    snippets = {
+        "claude-desktop": ("~/Library/Application Support/Claude/claude_desktop_config.json (or `dot-lit install-claude-desktop --write`)",
+                           json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
+        "claude-code": ("shell", f"claude mcp add dot-lit -e DOT_LIT_DATA_DIR={config.DATA_DIR} -- {exe}"),
+        "cursor": ("~/.cursor/mcp.json", json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
+        "vscode": (".vscode/mcp.json (GitHub Copilot agent mode)", json.dumps({"servers": {"dot-lit": {"type": "stdio", **stdio}}}, indent=2)),
+        "zed": ("~/.config/zed/settings.json", json.dumps({"context_servers": {"dot-lit": {"command": {"path": exe, "args": [], "env": env}}}}, indent=2)),
+        "continue": ("~/.continue/config.yaml", "mcpServers:\n  - name: dot-lit\n    command: " + exe + "\n    env:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
+        "lm-studio": ("LM Studio > Program > Install > Edit mcp.json", json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
+        "goose": ("~/.config/goose/config.yaml", "extensions:\n  dot-lit:\n    type: stdio\n    enabled: true\n    cmd: " + exe + "\n    args: []\n    envs:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
+        "open-webui": ("Run `dot-lit-mcp --transport streamable-http --port 8765`, then add as a Streamable HTTP tool server", http),
+        "librechat": ("librechat.yaml", "mcpServers:\n  dot-lit:\n    type: streamable-http\n    url: " + http),
+        "ollama-python": ("see tests/ollama_smoke.py for a minimal tool-calling loop over stdio", ""),
+    }
+    keys = [a.client] if a.client else list(snippets)
+    for k in keys:
+        if k not in snippets:
+            print(f"unknown client {k}; known: {', '.join(snippets)}", file=sys.stderr)
+            return 1
+        where, body = snippets[k]
+        print(f"### {k}\n# {where}\n{body}\n")
+    return 0
 
 
 def claude_desktop_config_path() -> Path:
@@ -295,6 +365,16 @@ def main(argv: list[str] | None = None) -> int:
     sch = sub.add_parser("install-schedule", help="print (or --write) launchd agents: weekly incremental + monthly fresh rebuild")
     sch.add_argument("--write", action="store_true")
     sch.set_defaults(fn=cmd_install_schedule)
+
+    dg = sub.add_parser("digest", help="markdown digest of records added in the last N days")
+    dg.add_argument("--days", type=int, default=7)
+    dg.add_argument("--limit", type=int, default=200)
+    dg.add_argument("--abstracts", action="store_true")
+    dg.set_defaults(fn=cmd_digest)
+
+    mc = sub.add_parser("mcp-config", help="print MCP client config snippets (claude-desktop, cursor, vscode, zed, continue, lm-studio, goose, open-webui, librechat)")
+    mc.add_argument("client", nargs="?")
+    mc.set_defaults(fn=cmd_mcp_config)
 
     i = sub.add_parser("install-claude-desktop", help="print (or --write) the Claude Desktop MCP config entry")
     i.add_argument("--write", action="store_true")

@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS records (
     rights          TEXT,
     landing_url     TEXT,
     raw             TEXT,   -- JSON: every DC field as harvested
-    harvested_at    TEXT
+    harvested_at    TEXT,
+    first_seen_at   TEXT    -- set on first insert only; basis for whats_new / digests
 );
 CREATE INDEX IF NOT EXISTS idx_records_year ON records(year);
 CREATE INDEX IF NOT EXISTS idx_records_datestamp ON records(datestamp);
@@ -113,13 +114,26 @@ CREATE TABLE IF NOT EXISTS fulltext (
     error      TEXT,
     fetched_at TEXT
 );
+CREATE VIRTUAL TABLE IF NOT EXISTS fulltext_fts USING fts5(
+    text, content='fulltext', content_rowid='rowid', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS fulltext_ai AFTER INSERT ON fulltext BEGIN
+  INSERT INTO fulltext_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS fulltext_ad AFTER DELETE ON fulltext BEGIN
+  INSERT INTO fulltext_fts(fulltext_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS fulltext_au AFTER UPDATE ON fulltext BEGIN
+  INSERT INTO fulltext_fts(fulltext_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+  INSERT INTO fulltext_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
 """
 
 RECORD_COLUMNS = [
     "id", "oai_identifier", "datestamp", "title", "alt_title", "authors", "corporate_authors",
     "contributors", "year", "year_source", "date_raw", "abstract", "table_of_contents", "notes", "publisher", "doc_type",
     "format", "language", "subjects", "collections", "doi", "report_numbers", "other_urls",
-    "spatial", "source", "rights", "landing_url", "raw", "harvested_at",
+    "spatial", "source", "rights", "landing_url", "raw", "harvested_at", "first_seen_at",
 ]
 JSON_COLUMNS = {"authors", "corporate_authors", "contributors", "subjects", "collections",
                 "report_numbers", "other_urls", "raw"}
@@ -145,9 +159,13 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(records)")}
-        for col, decl in (("year_source", "TEXT"), ("notes", "TEXT")):
+        for col, decl in (("year_source", "TEXT"), ("notes", "TEXT"), ("first_seen_at", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE records ADD COLUMN {col} {decl}")
+        self.conn.execute("UPDATE records SET first_seen_at = harvested_at WHERE first_seen_at IS NULL")
+        # populate the full-text FTS index for rows that predate it
+        if self.conn.execute("SELECT (SELECT COUNT(*) FROM fulltext) > (SELECT COUNT(*) FROM fulltext_fts)").fetchone()[0]:
+            self.conn.execute("INSERT INTO fulltext_fts(fulltext_fts) VALUES ('rebuild')")
         self.conn.commit()
 
     def close(self) -> None:
@@ -179,6 +197,7 @@ class Store:
                 continue
             row = dict(r)
             row["harvested_at"] = now
+            row["first_seen_at"] = now
             for c in JSON_COLUMNS:
                 row[c] = json.dumps(row.get(c) or ([] if c != "raw" else {}), ensure_ascii=False)
             rows.append(tuple(row.get(c) for c in RECORD_COLUMNS))
@@ -188,7 +207,7 @@ class Store:
             n += 1
         cols = ", ".join(RECORD_COLUMNS)
         placeholders = ", ".join("?" for _ in RECORD_COLUMNS)
-        updates = ", ".join(f"{c} = excluded.{c}" for c in RECORD_COLUMNS if c != "id")
+        updates = ", ".join(f"{c} = excluded.{c}" for c in RECORD_COLUMNS if c not in ("id", "first_seen_at"))
         with self.conn:
             self.conn.executemany(
                 f"INSERT INTO records({cols}) VALUES ({placeholders}) ON CONFLICT(id) DO UPDATE SET {updates}",
@@ -229,11 +248,13 @@ class Store:
         collection: str | None = None,
         doc_type: str | None = None,
         limit: int = 20,
+        offset: int = 0,
+        sources: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         terms = tokenize_query(query)
         if not terms:
             return []
-        filters, params = self._filters(year_min, year_max, collection, doc_type)
+        filters, params = self._filters(year_min, year_max, collection, doc_type, sources)
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -248,10 +269,12 @@ class Store:
                 ORDER BY score
                 LIMIT ?
             """
-            for row in self.conn.execute(sql, [match, *params, remaining + len(seen)]):
+            for row in self.conn.execute(sql, [match, *params, remaining + len(seen) + offset]):
                 if row["id"] in seen:
                     continue
                 seen.add(row["id"])
+                if len(seen) <= offset:
+                    continue
                 d = self._row_to_record(row)
                 d["match_mode"] = mode
                 results.append(d)
@@ -264,9 +287,13 @@ class Store:
         return results
 
     @staticmethod
-    def _filters(year_min, year_max, collection, doc_type) -> tuple[str, list[Any]]:
+    def _filters(year_min, year_max, collection, doc_type, sources=None) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
+        if sources:
+            prefixes = ["dot" if s_ in ("rosap", "dot") else s_ for s_ in sources]
+            clauses.append("AND (" + " OR ".join("r.id LIKE ?" for _ in prefixes) + ")")
+            params.extend(f"{pfx}:%" for pfx in prefixes)
         if year_min is not None:
             clauses.append("AND r.year >= ?")
             params.append(int(year_min))
@@ -282,6 +309,69 @@ class Store:
             clauses.append("AND r.doc_type LIKE ?")
             params.append(f"%{doc_type}%")
         return " ".join(clauses), params
+
+    def lookup(self, identifier: str) -> list[dict[str, Any]]:
+        """Find records by DOI, PMID, report number, TRID/ROSA-P id or landing URL."""
+        ident = identifier.strip()
+        m = re.search(r"(10\.\d{4,9}/[^\s\"<>]+)", ident)
+        rows: list = []
+        if m:
+            rows = self.conn.execute("SELECT * FROM records WHERE lower(doi) = lower(?)", (m.group(1).rstrip(".,;"),)).fetchall()
+        if not rows and re.fullmatch(r"\d{5,9}", ident):
+            rows = self.conn.execute("SELECT * FROM records WHERE id IN (?, ?)", (f"pubmed:{ident}", f"dot:{ident}")).fetchall()
+        if not rows:
+            rec = self.get_record(ident)
+            if rec:
+                return [rec]
+        if not rows:
+            rows = self.conn.execute("SELECT * FROM records WHERE report_numbers LIKE ? LIMIT 20", (f"%{ident}%",)).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def similar(self, record_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        rec = self.get_record(record_id)
+        if not rec:
+            return []
+        words = re.findall(r"[A-Za-zÀ-ÿ]{4,}", " ".join([rec.get("title") or "", " ".join(rec.get("subjects") or [])]))
+        stop = {"with", "from", "that", "this", "study", "report", "analysis", "final", "evaluation", "using", "their",
+                "united", "states", "transportation", "research", "based", "toward", "towards"}
+        terms = []
+        for w in words:
+            lw = w.lower()
+            if lw not in stop and lw not in terms:
+                terms.append(lw)
+        if not terms:
+            return []
+        match = " OR ".join(f'"{t}"' for t in terms[:12])
+        rows = self.conn.execute(f"""
+            SELECT r.*, bm25(records_fts, {BM25_WEIGHTS}) AS score FROM records_fts
+            JOIN records r ON r.rowid = records_fts.rowid
+            WHERE records_fts MATCH ? AND r.id != ? ORDER BY score LIMIT ?""", (match, rec["id"], limit)).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
+    def whats_new(self, days: int = 7, *, sources: list[str] | None = None, limit: int = 200) -> dict[str, Any]:
+        cutoff = (datetime.now(timezone.utc) - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        filters, params = self._filters(None, None, None, None, sources)
+        rows = self.conn.execute(f"SELECT * FROM records r WHERE first_seen_at >= ? {filters} ORDER BY first_seen_at DESC, year DESC LIMIT ?",
+                                 [cutoff, *params, limit]).fetchall()
+        counts = self.conn.execute(f"SELECT substr(id,1,instr(id,':')-1) AS src, COUNT(*) AS n FROM records r WHERE first_seen_at >= ? {filters} GROUP BY src ORDER BY n DESC",
+                                   [cutoff, *params]).fetchall()
+        return {"since": cutoff, "counts_by_source": {r["src"]: r["n"] for r in counts},
+                "records": [self._row_to_record(r) for r in rows]}
+
+    def search_fulltext(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        terms = tokenize_query(query)
+        if not terms:
+            return []
+        rows = self.conn.execute("""
+            SELECT f.record_id, r.title, r.year, r.landing_url, f.pdf_url, f.n_pages,
+                   snippet(fulltext_fts, 0, '[', ']', ' … ', 30) AS snippet, bm25(fulltext_fts) AS score
+            FROM fulltext_fts JOIN fulltext f ON f.rowid = fulltext_fts.rowid
+            LEFT JOIN records r ON r.id = f.record_id
+            WHERE fulltext_fts MATCH ? ORDER BY score LIMIT ?""", (" AND ".join(terms), limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def fulltext_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM fulltext WHERE status='ok'").fetchone()[0]
 
     # -- stats --------------------------------------------------------------------------
     def collections(self) -> list[dict[str, Any]]:
@@ -316,10 +406,15 @@ class Store:
         self.conn.execute("ATTACH DATABASE ? AS fresh", (str(other.path),))
         try:
             with self.conn:
+                self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS old_seen(id TEXT PRIMARY KEY, first_seen_at TEXT)")
+                self.conn.execute("DELETE FROM old_seen")
+                self.conn.execute("INSERT INTO old_seen SELECT id, first_seen_at FROM records WHERE id LIKE ?", (like,))
                 self.conn.execute("DELETE FROM record_collections WHERE record_id LIKE ?", (like,))
                 self.conn.execute("DELETE FROM records WHERE id LIKE ?", (like,))
                 cols = ", ".join(RECORD_COLUMNS)
                 self.conn.execute(f"INSERT INTO records({cols}) SELECT {cols} FROM fresh.records WHERE id LIKE ?", (like,))
+                self.conn.execute("UPDATE records SET first_seen_at = (SELECT first_seen_at FROM old_seen WHERE old_seen.id = records.id) "
+                                  "WHERE id LIKE ? AND id IN (SELECT id FROM old_seen)", (like,))
                 self.conn.execute("INSERT INTO record_collections SELECT * FROM fresh.record_collections WHERE record_id LIKE ?", (like,))
                 self.conn.execute("INSERT OR IGNORE INTO harvest_runs(source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes) "
                                   "SELECT source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes FROM fresh.harvest_runs WHERE status='complete'")

@@ -37,3 +37,35 @@ def test_tokenize_query():
 def test_normalize_id():
     for s in ("dot:5", "5", "oai:dot.stacks:dot:5", "https://rosap.ntl.bts.gov/view/dot/5"):
         assert normalize_id(s) == "dot:5"
+
+
+def test_lookup_similar_whatsnew_citations(tmp_path):
+    from dot_lit.citations import to_bibtex, to_ris
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_records([
+        {**_rec(1, "Driver improvement program evaluation", "negligent operator", 2007, ["Oregon DOT"]),
+         "doi": "10.1000/abc", "report_numbers": ["SPR 634"], "authors": ["Strathman, James G."]},
+        _rec(2, "Driver improvement schools and recidivism", "", 1982),
+        _rec(3, "Bridge deck overlays", "", 2019),
+    ])
+    assert [r["id"] for r in s.lookup("https://doi.org/10.1000/abc")] == ["dot:1"]
+    assert [r["id"] for r in s.lookup("SPR 634")] == ["dot:1"]
+    assert [r["id"] for r in s.lookup("dot:3")] == ["dot:3"]
+    assert s.similar("dot:1")[0]["id"] == "dot:2"
+    new = s.whats_new(1)
+    assert new["counts_by_source"] == {"dot": 3}
+    ris = to_ris([s.get_record("dot:1")])
+    assert "TY  - RPRT" in ris and "AU  - Strathman, James G." in ris and "M3  - SPR 634" in ris
+    bib = to_bibtex([s.get_record("dot:1")])
+    assert bib.startswith("@techreport{strathman2007dot1") and "doi = {10.1000/abc}" in bib
+    assert [h["id"] for h in s.search("driver", sources=["dot"], limit=1, offset=1)] == [s.search("driver", limit=2)[1]["id"]]
+    s.close()
+
+
+def test_fulltext_fts(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_records([_rec(1, "A report", "", 2000)])
+    s.put_fulltext("dot:1", pdf_url="x", status="ok", n_pages=1, n_chars=10, text="negligent operator points", error=None)
+    hits = s.search_fulltext("negligent operator")
+    assert hits and hits[0]["record_id"] == "dot:1" and "[negligent]" in hits[0]["snippet"]
+    s.close()

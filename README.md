@@ -15,6 +15,9 @@ continents plus whatever you export from TRID:
 | `wbokr` | World Bank Open Knowledge Repository | 976 | title-filtered subset of 40,332; measured precision 18/20 |
 | `ipea` | IPEA (Brazil) | 207 | filtered subset of 14,400; pt; precision ~16/20 |
 | `cepal` | CEPAL/ECLAC (Latin America) | 1,165 | filtered subset of 52,199; es/en; precision ~15/20 |
+| `openalex` | OpenAlex — works typed *report* in 10 transport topics (global) | 11,448 | topics: Traffic and Road Safety, Urban Transport and Accessibility, Transportation Planning, … |
+| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | see `harvest_status` | 20 ja/en queries, 10k cap each; ja |
+| `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | see `harvest_status` | ~105k; `DOT_LIT_PUBMED_TERM` overrides the strategy |
 | `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
 
 `dot-lit sources` lists them; `dot-lit harvest --source <key>|all` harvests them; the
@@ -38,11 +41,20 @@ fetch for full text. Re-harvests are incremental (`from=` on the OAI request) an
 
 | Tool | What it returns |
 |------|-----------------|
-| `search_reports(query, year_min?, year_max?, collection?, doc_type?, limit?)` | Ranked hits: id, title, authors, year, report numbers, DOI, landing URL, abstract snippet, `match_mode` |
-| `get_report(id)` | Full metadata record, including every raw Dublin Core field |
-| `get_fulltext(id, max_chars?, offset?, refresh?)` | Resolves the PDF on ROSA-P, extracts and caches the text; page through with `offset` |
-| `list_collections()` | Collections (`dc:relation.isPartOf`) and document types with counts |
-| `harvest_status()` | Record count, last harvest run and its status/notes, coverage by year and decade |
+| `search_reports(query, year_min?, year_max?, collection?, doc_type?, source?, limit?, offset?)` | Ranked hits: id, title, authors, year, report numbers, DOI, landing URL, abstract snippet, `match_mode`. Column prefixes work (`title:pedestrian`, `authors:lynn`) |
+| `lookup(identifier)` | Exact match by DOI, PMID, report number ("DOT HS 813 097"), id or landing URL |
+| `get_report(id)` | Full metadata record, including every raw field as harvested |
+| `get_fulltext(id, max_chars?, offset?, refresh?)` | Resolves the PDF (ROSA-P landing page, BASt/OpenAlex direct links), extracts and caches the text; page with `offset` |
+| `search_fulltext(query, limit?)` | Searches inside all PDF text already extracted, with snippets |
+| `find_similar(id, limit?)` | Related records across sources, by title and subject terms |
+| `export_citations(ids, format?)` | RIS (Zotero/EndNote/Mendeley) or BibTeX for a list of ids |
+| `whats_new(days?, source?, limit?)` | Records that entered the index in the last N days, with counts by source — the raw material for a weekly digest |
+| `list_collections()` | Collections and document types with counts |
+| `harvest_status()` | Record counts per source, last run and its status/notes, coverage by year |
+
+Plus one prompt, `literature_scan(topic)`, that walks a model through a multi-query scan with
+citations. Every tool carries MCP annotations (`readOnlyHint`, `idempotentHint`; only
+`get_fulltext` is `openWorldHint` because it may fetch one PDF).
 
 `id` accepts `dot:93144`, `93144`, `oai:dot.stacks:dot:93144`, or the landing URL. Imported
 records use other prefixes (`trid:813520`, `import:…`).
@@ -67,6 +79,25 @@ dot-lit search driver improvement program evaluation
 ```
 
 For development use `uv sync` and prefix commands with `uv run` (e.g. `uv run pytest`).
+
+### Any MCP client, any model
+
+The server speaks standard MCP over **stdio** (default) and **Streamable HTTP** / SSE
+(`dot-lit-mcp --transport streamable-http --port 8765`, endpoint `/mcp`). `dot-lit
+mcp-config [client]` prints a ready-to-paste snippet for: Claude Desktop, Claude Code,
+Cursor, VS Code (Copilot agent mode), Zed, Continue, LM Studio, Goose, Open WebUI and
+LibreChat (the last two over HTTP). A `Dockerfile` builds an HTTP server image with the
+index on a volume.
+
+**Open models.** Tested end to end on 2026-08-26 with Ollama `qwen2.5:3b` (3 B parameters)
+via `tests/ollama_smoke.py`: given "find reports about driver improvement programs; list 3
+titles with years and ids", the model called `search_reports({"query": "driver improvement",
+"limit": 3})` once and answered with correct titles, years, ids and landing URLs from three
+sources. Design choices that make small models work: ten tools with one-line-first
+descriptions, flat JSON arguments with defaults, compact hit objects (no raw metadata in
+search results), and a server `instructions` string that names the sources and filters. Run
+the smoke test with any tool-capable model: `OLLAMA_MODEL=llama3.1 uv run python
+tests/ollama_smoke.py "…"`.
 
 ### Register in Claude Desktop
 
@@ -97,6 +128,14 @@ Restart Claude Desktop afterwards. For Claude Code: `claude mcp add dot-lit -- d
 | `DOT_LIT_MAX_PDF_PAGES` | 600 | Stop extraction after this many pages |
 
 No credentials are used or stored anywhere; every request goes to public endpoints.
+
+### Install without cloning (after the first PyPI release)
+
+`uvx --from dot-lit dot-lit-mcp` will run the server straight from PyPI once the
+`publish.yml` workflow is armed: on pypi.org create the `dot-lit` project and add a *trusted
+publisher* (owner `aquistbe`, repo `dot-lit`, workflow `publish.yml`, environment `pypi`);
+every GitHub Release then publishes automatically. `server.json` is the manifest for the
+MCP Registry (`registry.modelcontextprotocol.io`), to submit after the PyPI package exists.
 
 ### Pinned versions
 
@@ -396,8 +435,28 @@ exactly such a journal list and hand-classifies articles by topic, which would m
 best seed for the journal filter; its site was unreachable (connection refused on every
 host name) when checked on 2026-08-26, so its current status is unconfirmed.
 
+### Weekly digest (a SafetyLit-style bulletin)
+
+`dot-lit digest --days 7 [--abstracts]` prints a Markdown bulletin of everything that entered
+the index in the last week, grouped by source, with counts. It is driven by `first_seen_at`,
+which is set the first time a record is seen and preserved across fresh rebuilds, so a
+monthly rebuild does not make the whole index look new. The `whats_new` tool exposes the
+same data to a model, which can then write the summaries — the editorial step SafetyLit did
+by hand.
+
+### Compared with other literature MCPs
+
+PubMed, Semantic Scholar, OpenAlex and arXiv MCP servers proxy live queries to one API.
+`dot-lit` differs in three ways: it indexes **grey literature the aggregators lack** (agency
+reports, state DOT evaluations, ITRD-contributing institutes), it **runs offline** on a local
+index after harvesting (no rate limits at query time, no key), and it is **multi-source**
+with one id scheme, so a model can search everything at once and export citations. What
+those servers have that this one still lacks: citation graphs (who cites whom), author
+disambiguation, and semantic (embedding) search — see below.
+
 ## Embeddings (not in v1)
 
 Search is lexical (FTS5/BM25). The schema leaves room for a `record_embeddings` table keyed
 by `records.id`; a hybrid ranker could fuse BM25 with cosine scores. Keep it optional so the
-package installs without a model download.
+package installs without a model download; an Ollama embedding model (e.g. `qwen3-embedding`)
+would keep it fully local.

@@ -6,8 +6,11 @@ store except ``get_fulltext``, which may fetch one PDF from ROSA-P on a cache mi
 
 from __future__ import annotations
 
+import argparse
 import logging
 from typing import Any
+
+from mcp.types import ToolAnnotations
 
 try:  # mcp >= 2: FastMCP was renamed MCPServer (same decorator API)
     from mcp.server.mcpserver import MCPServer as FastMCP
@@ -15,6 +18,7 @@ except ModuleNotFoundError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
 from . import config
+from .citations import to_bibtex, to_ris
 from .fulltext import get_fulltext as _get_fulltext
 from .harvest import status as _status
 from .store import Store, normalize_id
@@ -36,6 +40,9 @@ mcp = FastMCP(
         "last harvest."
     ),
 )
+
+RO = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
+RO_NET = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 
 _store: Store | None = None
 
@@ -67,41 +74,47 @@ def _hit(r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=RO)
 def search_reports(
     query: str,
     year_min: int | None = None,
     year_max: int | None = None,
     collection: str | None = None,
     doc_type: str | None = None,
+    source: str | None = None,
     limit: int = 20,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Full-text search of the harvested ROSA-P index.
+    """Search titles, abstracts, subjects, authors and report numbers across all sources.
 
     Args:
-        query: Keywords; quote phrases ("driver improvement"); trailing * = prefix.
+        query: Keywords. Quote phrases ("driver improvement"); trailing * = prefix;
+            column prefixes work: title:pedestrian, authors:lynn, report_numbers:"813 097".
         year_min / year_max: Inclusive publication-year filter.
-        collection: Substring filter on ROSA-P collection name (see list_collections),
-            e.g. "NHTSA", "Federal Highway Administration", "University Transportation Centers".
+        collection: Substring filter on collection name (see list_collections), e.g. "NHTSA",
+            "VTI", "BASt", "World Bank", "CEPAL", "TRID", "PubMed".
         doc_type: Substring filter on document type, e.g. "Tech Report", "Dataset".
-        limit: Max hits (1-100).
-    Returns ranked hits with id, title, authors, year, report numbers, DOI, landing URL and
-    an abstract snippet. ``match_mode`` tells whether all query terms matched.
+        source: Comma-separated id prefixes to restrict to, e.g. "dot,vti" (dot = ROSA-P,
+            vti, bast, wbokr, ipea, cepal, openalex, cinii, pubmed, trid).
+        limit: Max hits (1-100). offset: for paging.
+    Returns ranked hits; ``match_mode`` says whether all query terms matched (all_terms) or
+    the hit came from the any-term fallback.
     """
     limit = max(1, min(int(limit or 20), 100))
+    srcs = [x.strip() for x in source.split(",") if x.strip()] if source else None
     hits = store().search(query, year_min=year_min, year_max=year_max, collection=collection,
-                          doc_type=doc_type, limit=limit)
+                          doc_type=doc_type, limit=limit, offset=max(0, int(offset or 0)), sources=srcs)
     return {
         "query": query,
-        "filters": {k: v for k, v in dict(year_min=year_min, year_max=year_max,
-                                            collection=collection, doc_type=doc_type).items() if v},
+        "filters": {k: v for k, v in dict(year_min=year_min, year_max=year_max, collection=collection,
+                                            doc_type=doc_type, source=source, offset=offset or None).items() if v},
         "n": len(hits),
         "index_size": store().count(),
         "hits": [_hit(h) for h in hits],
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=RO)
 def get_report(id: str) -> dict[str, Any]:
     """Full metadata record for one report. Accepts 'dot:93144', '93144', the OAI
     identifier, or the ROSA-P landing URL. Includes every raw Dublin Core field."""
@@ -114,7 +127,7 @@ def get_report(id: str) -> dict[str, Any]:
     return rec
 
 
-@mcp.tool()
+@mcp.tool(annotations=RO_NET)
 def get_fulltext(id: str, max_chars: int = 40000, offset: int = 0, refresh: bool = False) -> dict[str, Any]:
     """Resolve the report's PDF on ROSA-P, extract its text and return it (cached
     locally after the first call). Page through long documents with ``offset``.
@@ -140,7 +153,7 @@ def get_fulltext(id: str, max_chars: int = 40000, offset: int = 0, refresh: bool
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=RO)
 def list_collections() -> dict[str, Any]:
     """Collections (ROSA-P ``relation.isPartOf`` values) with record counts, plus document
     types. ROSA-P's OAI-PMH endpoint exposes no OAI sets, so these are derived from the
@@ -150,18 +163,80 @@ def list_collections() -> dict[str, Any]:
             "collections": s.collections(), "doc_types": s.doc_types()}
 
 
-@mcp.tool()
+@mcp.tool(annotations=RO)
 def harvest_status() -> dict[str, Any]:
-    """Record count, last harvest time/status, resumptions/notes, and coverage by year.
-    If the last run is not 'complete' the index may be partial."""
+    """Record counts per source, last harvest time/status and notes, coverage by year.
+    If a source's last run is not 'complete' its part of the index may be partial."""
     return _status(store())
 
 
+@mcp.tool(annotations=RO)
+def lookup(identifier: str) -> dict[str, Any]:
+    """Exact lookup by DOI, PMID, report number (e.g. "DOT HS 813 097"), dot-lit id, or
+    landing URL. Use this instead of search when you already have an identifier."""
+    recs = store().lookup(identifier)
+    return {"identifier": identifier, "n": len(recs), "records": [_hit(r) for r in recs]}
+
+
+@mcp.tool(annotations=RO)
+def find_similar(id: str, limit: int = 10) -> dict[str, Any]:
+    """Records similar to a given one (by title and subject terms), across all sources."""
+    recs = store().similar(id, limit=max(1, min(int(limit or 10), 50)))
+    return {"id": id, "n": len(recs), "hits": [_hit(r) for r in recs]}
+
+
+@mcp.tool(annotations=RO)
+def export_citations(ids: list[str], format: str = "ris") -> dict[str, Any]:
+    """Export records as RIS (Zotero/EndNote/Mendeley) or BibTeX. Pass dot-lit ids."""
+    recs = [r for r in (store().get_record(i) for i in ids[:200]) if r]
+    fmt = (format or "ris").lower()
+    text = to_bibtex(recs) if fmt in ("bib", "bibtex") else to_ris(recs)
+    return {"format": "bibtex" if fmt in ("bib", "bibtex") else "ris", "n": len(recs),
+            "missing": [i for i in ids if not store().get_record(i)], "text": text}
+
+
+@mcp.tool(annotations=RO)
+def search_fulltext(query: str, limit: int = 20) -> dict[str, Any]:
+    """Search inside the PDF text that get_fulltext has already extracted and cached
+    (only documents someone fetched before). Returns snippets with [term] markers."""
+    hits = store().search_fulltext(query, limit=max(1, min(int(limit or 20), 100)))
+    return {"query": query, "documents_indexed": store().fulltext_count(), "n": len(hits), "hits": hits}
+
+
+@mcp.tool(annotations=RO)
+def whats_new(days: int = 7, source: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """Records that entered the index in the last N days (from the weekly incremental
+    harvests), newest first, with counts by source. The raw material for a digest."""
+    srcs = [x.strip() for x in source.split(",") if x.strip()] if source else None
+    d = store().whats_new(max(1, int(days or 7)), sources=srcs, limit=max(1, min(int(limit or 100), 500)))
+    return {"since": d["since"], "counts_by_source": d["counts_by_source"], "n": len(d["records"]),
+            "records": [_hit(r) for r in d["records"]]}
+
+
+@mcp.prompt()
+def literature_scan(topic: str) -> str:
+    """Scan the grey literature on a topic and summarise what exists, by source and decade."""
+    return (f"Use search_reports to find reports on: {topic}. Run 3-5 varied queries (synonyms, "
+            f"quoted phrases), then filter by source (dot, vti, bast, wbokr, cepal, ipea, pubmed, "
+            f"openalex, cinii) to see coverage. For the 5 most relevant, call get_report and, if a PDF "
+            f"is linked, get_fulltext. Summarise: what exists, by agency/country and decade; key "
+            f"findings with effect sizes when reported; gaps. Cite each item as title (year) [id] "
+            f"with its landing_url. Finish with export_citations for the items you cite.")
+
+
 def main() -> None:
-    # stdout is the MCP transport; keep stderr quiet so Claude Desktop logs stay readable.
+    ap = argparse.ArgumentParser(prog="dot-lit-mcp", description="dot-lit MCP server")
+    ap.add_argument("--transport", choices=["stdio", "streamable-http", "sse"], default="stdio")
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8765)
+    a = ap.parse_args()
+    # stdout is the MCP transport in stdio mode; keep stderr quiet so client logs stay readable.
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    mcp.run(transport="stdio")
+    if a.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport=a.transport, host=a.host, port=a.port)
 
 
 if __name__ == "__main__":

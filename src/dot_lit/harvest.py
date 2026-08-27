@@ -38,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 from . import config
 from .dc import OAI_NS, parse_record
 from .oai import BadResumptionToken, NoRecordsMatch, OAIClient, TransportError, TruncatedList
+from .apis import API_SOURCES, ApiSource, _client as _api_client
 from .sources import SOURCES, Source, matches_filter
 from .store import Store, utcnow
 
@@ -265,6 +266,108 @@ def harvest(
             client.close()
 
 
+def harvest_api(store: Store, source: ApiSource, *, mode: str = "auto",
+                progress: Callable[[str], None] | None = None) -> HarvestResult:
+    """Harvest a query-API source.  Raw pages are cached like OAI pages."""
+    import gzip as _gzip
+
+    say = progress or (lambda m: log.info(m))
+    config.ensure_dirs()
+    last_any = store.last_complete_run(source.key)
+    if mode == "auto":
+        mode = "incremental" if last_any else "full"
+    since = None
+    if mode == "incremental":
+        if not last_any:
+            raise RuntimeError(f"no complete harvest of {source.key} to be incremental from")
+        since = _ts(_parse_ts(last_any["started_at"]) - timedelta(days=2))
+    run_id = store.start_run(source.key, mode, since, utcnow())
+    notes: list[str] = []
+    pages = seen = 0
+    client, _ = _api_client(source.min_interval)
+    say(f"run {run_id}: {source.key} {mode} harvest" + (f" since {since}" if since else ""))
+    try:
+        for label, raw in source.pages(client, since, say):
+            (config.RAW_DIR / f"run{run_id}-{label}.{source.raw_ext}.gz").write_bytes(_gzip.compress(raw))
+            recs = source.parse(raw)
+            store.upsert_records(recs)
+            pages += 1
+            seen += len(recs)
+            if pages % 10 == 0:
+                store.update_run(run_id, pages=pages, records_seen=seen)
+                say(f"page {pages}: +{len(recs)} (total {seen})")
+        fin = utcnow()
+        store.update_run(run_id, status="complete", finished_at=fin, pages=pages, records_seen=seen, notes=notes)
+        store.set_meta(f"last_harvest_finished_at:{source.key}", fin)
+        say(f"complete: {pages} pages, {seen} records, store now {store.count()}")
+        return HarvestResult(run_id, mode, "complete", seen, pages, 0, notes, "", fin, store.count())
+    except KeyboardInterrupt:
+        notes.append("interrupted by user")
+        store.update_run(run_id, status="failed", finished_at=utcnow(), pages=pages, records_seen=seen, notes=notes)
+        return HarvestResult(run_id, mode, "failed", seen, pages, 0, notes, "", utcnow(), store.count())
+    except Exception as exc:  # noqa: BLE001
+        notes.append(f"error: {exc!r}")
+        say(f"FAILED: {exc}")
+        store.update_run(run_id, status="failed", finished_at=utcnow(), pages=pages, records_seen=seen, notes=notes)
+        return HarvestResult(run_id, mode, "failed", seen, pages, 0, notes, "", utcnow(), store.count())
+    finally:
+        client.close()
+
+
+def reindex_api(store: Store, source: ApiSource, *, progress: Callable[[str], None] | None = None) -> dict:
+    import gzip as _gzip
+
+    say = progress or (lambda m: log.info(m))
+    last_full = store.last_complete_run(source.key, "full")
+    if not last_full:
+        raise RuntimeError(f"no complete full harvest of {source.key} to reindex from")
+    runs = [r for r in reversed(store.last_runs(10_000))
+            if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == source.key]
+    kept: set[str] = set()
+    total = files = 0
+    for run in runs:
+        for f in sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.{source.raw_ext}.gz")):
+            recs = source.parse(_gzip.decompress(f.read_bytes()))
+            store.upsert_records(recs)
+            kept.update(r["id"] for r in recs)
+            total += len(recs)
+            files += 1
+    pruned = store.prune_source(source.key, kept) if files else 0
+    say(f"reindex complete: {files} pages, {total} records re-parsed, {pruned} pruned, store has {store.count()} records")
+    return {"runs": [r["id"] for r in runs], "pages": files, "records": total, "pruned": pruned, "total_in_store": store.count()}
+
+
+def harvest_fresh_api(store: Store, source: ApiSource, *, progress: Callable[[str], None] | None = None) -> HarvestResult:
+    say = progress or (lambda m: log.info(m))
+    tmp_path = store.path.with_name(f"{store.path.stem}.rebuild-{source.key}.sqlite")
+    for suffix in ("", "-wal", "-shm"):
+        pth = tmp_path.with_name(tmp_path.name + suffix)
+        if pth.exists():
+            pth.unlink()
+    tmp = Store(tmp_path)
+    try:
+        res = harvest_api(tmp, source, mode="full", progress=say)
+        if res.status != "complete":
+            say("fresh rebuild aborted: harvest did not complete; live index unchanged")
+            return res
+        tmp.close(); tmp = None
+        other = Store(tmp_path)
+        try:
+            n = store.replace_source(source.key, other)
+        finally:
+            other.close()
+        say(f"fresh rebuild swapped in {n} {source.key} records; store now {store.count()} records")
+        res.total_in_store = store.count()
+        return res
+    finally:
+        if tmp is not None:
+            tmp.close()
+        for suffix in ("", "-wal", "-shm"):
+            pth = tmp_path.with_name(tmp_path.name + suffix)
+            if pth.exists():
+                pth.unlink()
+
+
 def harvest_fresh(store: Store, *, source: Source | None = None, progress: Callable[[str], None] | None = None) -> HarvestResult:
     """True rebuild: full-harvest ROSA-P into a temporary store, then atomically swap the
     `dot:` records into the live store.  Records that ROSA-P no longer serves disappear;
@@ -349,10 +452,12 @@ def status(store: Store) -> dict:
     years = store.year_distribution()
     known = {k: v for k, v in years.items() if k != "unknown"}
     per_source = {}
-    for key, src in SOURCES.items():
+    dist = store.source_distribution()
+    for key, src in list(SOURCES.items()) + list(API_SOURCES.items()):
         lc = store.last_complete_run(key)
         per_source[key] = {
-            "name": src.name, "base_url": src.base_url, "records": store.source_distribution().get("dot" if key == "rosap" else key, 0),
+            "name": src.name, "base_url": getattr(src, "base_url", "api"),
+            "records": dist.get("dot" if key == "rosap" else key, 0),
             "last_complete_run": {k: lc[k] for k in ("id", "kind", "finished_at", "records_seen", "pages", "notes")} if lc else None,
         }
     return {
