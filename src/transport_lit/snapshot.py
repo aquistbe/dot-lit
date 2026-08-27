@@ -101,6 +101,8 @@ def install(src: str, *, force: bool = False, progress: Callable[[str], None] | 
         p = config.DB_PATH.with_name(config.DB_PATH.name + suffix)
         if p.exists():
             p.unlink()
+    if src.startswith(("http://", "https://")) and local.exists():
+        local.unlink()  # the downloaded archive is ~1 GB; nothing needs it after extraction
     manifest = json.loads((config.DATA_DIR / "manifest.json").read_text())
     s = Store(config.DB_PATH)
     if manifest.get("vectors"):
