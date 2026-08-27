@@ -191,6 +191,30 @@ def cmd_snapshot(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cite(a: argparse.Namespace) -> int:
+    from .graph import Graph
+
+    s = _store()
+    try:
+        g = Graph(s)
+        d = g.references(a.id, refresh=a.refresh) if a.direction == "refs" else g.citations(a.id, refresh=a.refresh, only_in_index=a.in_index)
+    finally:
+        s.close()
+    if a.json:
+        print(json.dumps(d, indent=2, ensure_ascii=False))
+        return 0
+    if not d.get("resolved"):
+        print(f"{d['id']}: not found in OpenAlex (no DOI/PMID and no exact title match)")
+        return 1
+    key = "references" if a.direction == "refs" else "citations"
+    extra = f", OpenAlex total cited_by={d.get('cited_by_count_openalex')}" if key == "citations" else ""
+    print(f"{d['id']} -> {d['openalex_id']} (match={d['match']}): {d['n']} {key}, {d['in_index']} in this index{extra}")
+    for w in d[key][: a.limit]:
+        tag = f"[{w['record_id']}]" if w.get("record_id") else f"({w['openalex_id']})"
+        print(f"  {tag:34s} ({w.get('year') or 'n.d.'}) {(w.get('title') or '')[:90]}  cited_by={w.get('cited_by_count')}")
+    return 0
+
+
 def cmd_digest(a: argparse.Namespace) -> int:
     """Markdown digest of what entered the index recently — the skeleton of a weekly bulletin."""
     s = _store()
@@ -427,6 +451,15 @@ def main(argv: list[str] | None = None) -> int:
     sn.add_argument("--exclude", help="build: comma-separated sources to leave out (default: cinii,trid; pass '' for none)")
     sn.add_argument("--force", action="store_true", help="install: replace an existing index")
     sn.set_defaults(fn=cmd_snapshot)
+
+    ct = sub.add_parser("cite", help="citation graph: references of, or works citing, a record (OpenAlex, cached)")
+    ct.add_argument("direction", choices=["refs", "cites"])
+    ct.add_argument("id")
+    ct.add_argument("--in-index", action="store_true", help="cites: only citing works that are in this index")
+    ct.add_argument("--refresh", action="store_true")
+    ct.add_argument("--limit", type=int, default=30)
+    ct.add_argument("--json", action="store_true")
+    ct.set_defaults(fn=cmd_cite)
 
     dg = sub.add_parser("digest", help="markdown digest of records added in the last N days")
     dg.add_argument("--days", type=int, default=7)

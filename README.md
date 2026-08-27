@@ -50,6 +50,8 @@ fetch for full text. Re-harvests are incremental (`from=` on the OAI request) an
 | `search_fulltext(query, limit?)` | Searches inside all PDF text already extracted, with snippets |
 | `find_similar(id, limit?)` | Related records across sources, by title and subject terms |
 | `export_citations(ids, format?)` | RIS (Zotero/EndNote/Mendeley) or BibTeX for a list of ids |
+| `get_references(id, limit?, refresh?)` | Works the record cites (OpenAlex, cached); entries carry `record_id` when the cited work is in this index |
+| `get_citations(id, limit?, only_in_index?, refresh?)` | Works citing the record; `only_in_index=True` = "what in this index has built on it"; OpenAlex's total `cited_by_count` |
 | `whats_new(days?, source?, limit?)` | Records that entered the index in the last N days, with counts by source — the raw material for a weekly digest |
 | `list_collections()` | Collections and document types with counts |
 | `harvest_status()` | Record counts per source, last run and its status/notes, coverage by year |
@@ -486,6 +488,26 @@ index after harvesting (no rate limits at query time, no key), and it is **multi
 with one id scheme, so a model can search everything at once and export citations. What
 those servers have that this one still lacks: citation graphs (who cites whom), author
 disambiguation, and semantic (embedding) search — see below.
+
+## Citation graph (v0.5)
+
+`get_references` / `get_citations` (CLI: `transport-lit cite refs|cites <id> [--in-index]`) attach
+OpenAlex's citation graph to the index. A record is matched to an OpenAlex work by its
+OpenAlex id, DOI, PMID, or — for the many undated, DOI-less agency reports — an exact
+normalised title with the year within ±1 (`match` in the result says which). Edges are
+fetched on first request and cached in the `citations`/`works` tables; citing lists are
+refreshed after 90 days, references never change. Cited works that are themselves in the
+index come back with their `record_id`, and search hits carry `cited_by_count` once known.
+
+Verified 2026-08-27: the Oregon DMV DIP evaluation (`dot:21848`, no DOI, no date in ROSA-P)
+resolved by title and lists 6 citing works, among them Iowa's DIP evaluation and the NJ
+recidivism study; Lynn's 1982 Virginia 24-month report is cited by the 2003 Cochrane
+review of post-licence driver education (`pubmed:12917984`, in the index); a 2020 Seoul
+elderly-pedestrian paper has 57 references, 19 in the index. Coverage caveat: OpenAlex
+indexes Crossref DOIs well and NTL's DataCite DOIs (`10.21949/…`) only partially, so some
+ROSA-P reports with DOIs resolve only by title or not at all; that is a property of the
+citation data, not of the index. OpenCitations and Semantic Scholar could be added as
+fallbacks in the same tables.
 
 ## Semantic search (v0.4)
 

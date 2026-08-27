@@ -21,6 +21,7 @@ from . import config
 from .citations import to_bibtex, to_ris
 from .embeddings import active_index, hybrid_search
 from .fulltext import get_fulltext as _get_fulltext
+from .graph import Graph
 from .harvest import status as _status
 from .store import Store, normalize_id
 
@@ -53,6 +54,20 @@ def store() -> Store:
     if _store is None:
         _store = Store(config.DB_PATH)
     return _store
+
+
+_graph: Graph | None = None
+
+
+def graph() -> Graph:
+    global _graph
+    if _graph is None:
+        _graph = Graph(store())
+    return _graph
+
+
+def _work(w: dict[str, Any]) -> dict[str, Any]:
+    return {k: w.get(k) for k in ("openalex_id", "record_id", "doi", "pmid", "title", "year", "cited_by_count", "type", "venue")}
 
 
 def _hit(r: dict[str, Any]) -> dict[str, Any]:
@@ -113,6 +128,10 @@ def search_reports(
     hits, used = hybrid_search(store(), query, mode=mode, limit=limit, offset=max(0, int(offset or 0)),
                                year_min=year_min, year_max=year_max, collection=collection, doc_type=doc_type,
                                sources=srcs)
+    counts = graph().cited_by_counts([h["id"] for h in hits])
+    for h in hits:
+        if h["id"] in counts:
+            h["cited_by_count"] = counts[h["id"]]
     return {
         "query": query,
         "mode_used": used,
@@ -120,7 +139,7 @@ def search_reports(
                                             doc_type=doc_type, source=source, offset=offset or None).items() if v},
         "n": len(hits),
         "index_size": store().count(),
-        "hits": [_hit(h) | {k: h.get(k) for k in ("keyword_rank", "semantic_rank", "semantic_score") if h.get(k) is not None} for h in hits],
+        "hits": [_hit(h) | {k: h.get(k) for k in ("keyword_rank", "semantic_rank", "semantic_score", "cited_by_count") if h.get(k) is not None} for h in hits],
     }
 
 
@@ -179,6 +198,7 @@ def harvest_status() -> dict[str, Any]:
     If a source's last run is not 'complete' its part of the index may be partial."""
     st = _status(store())
     idx = active_index(store())
+    st["citation_graph"] = graph().stats()
     st["embeddings"] = ({"backend": idx.meta.get("backend"), "model": idx.meta.get("model"), "dim": idx.meta.get("dim"),
                          "vectors": len(idx), "coverage": round(len(idx) / max(store().count(), 1), 3),
                          "updated_at": idx.meta.get("updated_at")} if idx else None)
@@ -226,6 +246,26 @@ def whats_new(days: int = 7, source: str | None = None, limit: int = 100) -> dic
     d = store().whats_new(max(1, int(days or 7)), sources=srcs, limit=max(1, min(int(limit or 100), 500)))
     return {"since": d["since"], "counts_by_source": d["counts_by_source"], "n": len(d["records"]),
             "records": [_hit(r) for r in d["records"]]}
+
+
+@mcp.tool(annotations=RO_NET)
+def get_references(id: str, limit: int = 100, refresh: bool = False) -> dict[str, Any]:
+    """Works a record cites (its reference list), via OpenAlex, cached locally. Each entry
+    carries ``record_id`` when the cited work is itself in this index. ``match`` says how
+    the record was matched to OpenAlex (openalex, doi, pmid, or title)."""
+    d = graph().references(id, refresh=refresh)
+    d["references"] = [_work(w) for w in d["references"][: max(1, min(int(limit or 100), 500))]]
+    return d
+
+
+@mcp.tool(annotations=RO_NET)
+def get_citations(id: str, limit: int = 100, only_in_index: bool = False, refresh: bool = False) -> dict[str, Any]:
+    """Works that cite a record, via OpenAlex, cached locally (refreshed after 90 days).
+    ``only_in_index=True`` returns just citing works that are in this index — 'what has
+    built on this report'. ``cited_by_count_openalex`` is OpenAlex's total."""
+    d = graph().citations(id, refresh=refresh, only_in_index=only_in_index)
+    d["citations"] = [_work(w) for w in d["citations"][: max(1, min(int(limit or 100), 500))]]
+    return d
 
 
 @mcp.prompt()
