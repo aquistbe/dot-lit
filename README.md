@@ -12,9 +12,9 @@ continents plus whatever you export from TRID:
 | `dot` | ROSA-P — U.S. DOT National Transportation Library | 90,599 | full repository |
 | `vti` | VTI — Swedish National Road and Transport Research Institute (DiVA) | 11,460 | reports, conference papers, articles; en/sv |
 | `bast` | BASt — German Federal Highway Research Institute (OPUS) | 2,970 | 1,901 with direct PDF links; de/en |
-| `wbokr` | World Bank Open Knowledge Repository | see `harvest_status` | transport-filtered subset of ~40k |
-| `ipea` | IPEA (Brazil) | see `harvest_status` | transport-filtered subset of ~14k; pt |
-| `cepal` | CEPAL/ECLAC (Latin America) | see `harvest_status` | transport-filtered subset of ~52k; es/en/pt |
+| `wbokr` | World Bank Open Knowledge Repository | 976 | title-filtered subset of 40,332; measured precision 18/20 |
+| `ipea` | IPEA (Brazil) | 207 | filtered subset of 14,400; pt; precision ~16/20 |
+| `cepal` | CEPAL/ECLAC (Latin America) | 1,165 | filtered subset of 52,199; es/en; precision ~15/20 |
 | `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
 
 `dot-lit sources` lists them; `dot-lit harvest --source <key>|all` harvests them; the
@@ -153,8 +153,17 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   `Identify`): ROSA-P, DiVA and DSpace take full `YYYY-MM-DDThh:mm:ssZ` timestamps, OPUS
   (BASt) takes only `YYYY-MM-DD` and the window is widened a day each side.
 * Broad repositories (World Bank, IPEA, CEPAL) are filtered at harvest time by a
-  multilingual transport regex (`sources.TRANSPORT_RE`, en/es/pt/de/fr/sv) over title,
-  subjects and abstract; the run notes record how many were kept vs skipped.
+  multilingual transport vocabulary (`sources.TRANSPORT_RE`, en/es/pt/de/fr/sv): a record is
+  kept if a term appears in the **title**, or (IPEA, CEPAL) if two distinct terms appear
+  among the **subject headings**. Abstracts are ignored — development literature mentions
+  roads and ports in passing — and World Bank subjects are ignored too (100+ headings per
+  record). This was tuned on 2026-08-26 against random 20-title samples: the loose
+  title+subjects+abstract rule kept 15,271 World Bank records at roughly 35–50 % precision;
+  the final rule keeps 976 at 18/20, IPEA 207 at ~16/20, CEPAL 1,165 at ~15/20. Recall is
+  the price; loosen `min_subject_hits` in `sources.py` and run `dot-lit reindex --source
+  <key>` (no network) if you want the other trade. The run notes record kept vs skipped.
+* `dot-lit reindex --source <key>` re-parses the cached pages **and prunes** records the
+  current parser/filter no longer keeps, so filter changes never need a re-harvest.
 
 ### Monthly rebuild and weekly updates (maintenance schedule)
 
@@ -207,7 +216,20 @@ is what `list_collections` / the `collection` filter use.
 PDF links are not in the metadata; `get_fulltext` reads `citation_pdf_url` from the landing
 page and falls back to the datastream convention `/view/dot/{n}/dot_{n}_DS1.pdf`.
 
-## Verification (2026-08-26, first full harvest)
+## Verification (2026-08-26)
+
+**v0.2.0 multi-source harvest.** VTI: 120 pages, 11,944 seen, 11,460 unique (DiVA serves
+some records in several sets), 0 resumptions. BASt: 30 pages, 2,987 seen, 2,970 unique;
+1,901 with direct PDF links; day-granularity incremental path exercised (24 records).
+World Bank: 404 pages / 40,332 seen; IPEA: 144 / 14,400; CEPAL: 522 / 52,199 — all ended on
+a token-less page with 0 resumptions; filtered counts above. Spot searches: `Fußgänger
+Unfall` (BASt) → crash reconstruction and rural-road crash statistics; `acidentes de
+trânsito mortalidade` (IPEA) → "Mortalidade por acidentes de transporte terrestre e
+desigualdades interestaduais no Brasil"; `seguridad vial peatones` (CEPAL) → road-safety
+governance and campaign evaluations; `pedestrian safety` (VTI) → 1990s child-pedestrian
+training studies.
+
+### v0.1.0 (first ROSA-P harvest)
 
 **Harvest completeness.** Run 1 (`full`) walked 908 pages / 90,706 records in 15 min
 (00:03:59–00:19:11 UTC) with 0 resumptions, 0 cursor mismatches, and ended on a page of 6
@@ -349,7 +371,7 @@ not be used to train LLMs. It is deliberately not scraped here.
 
 ### v2 order (agreed 2026-08-26)
 
-1. ~~VTI + BASt~~ (done, v0.2) — 2. ~~World Bank OKR, IPEA, CEPAL~~ (done, v0.2) —
+1. ~~VTI + BASt~~ (done, v0.2.0) — 2. ~~World Bank OKR, IPEA, CEPAL~~ (done, v0.2.0) —
 3. IRDB Japan — 4. OpenAlex `type:report` as global backstop — 5. a **PubMed transport
 subset** (see below). VTI note: DiVA's `oai_dc` carries no full-text link; switching that
 source to `swepub_mods`/`mets_kb` would give `get_fulltext` the `FULLTEXT01.pdf` URL.

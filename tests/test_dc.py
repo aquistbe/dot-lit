@@ -109,8 +109,16 @@ def test_transport_filter():
     from dot_lit.sources import SOURCES, matches_filter
     wb = SOURCES["wbokr"]
     assert matches_filter(wb, {"title": "Seguridad vial en ciudades", "subjects": [], "abstract": ""})
-    assert matches_filter(wb, {"title": "Growth", "subjects": ["Roads"], "abstract": ""})
+    assert not matches_filter(wb, {"title": "Growth", "subjects": ["Roads", "Traffic"], "abstract": ""})  # WB: title only
+    ipea = SOURCES["ipea"]
+    assert not matches_filter(ipea, {"title": "Growth", "subjects": ["Roads"], "abstract": ""})
+    assert matches_filter(ipea, {"title": "Growth", "subjects": ["Roads", "Traffic"], "abstract": ""})
+    assert not matches_filter(ipea, {"title": "Tráfico de drogas nos tribunais", "subjects": [], "abstract": ""})
     assert not matches_filter(wb, {"title": "Monetary policy and inflation", "subjects": ["Banking"], "abstract": "Roadmap for reform."})
+    # one incidental hit in a long abstract is not enough; two distinct terms are
+    assert not matches_filter(wb, {"title": "Country Water Strategy", "subjects": [], "abstract": "Road safety, pedestrians and traffic are addressed."})
+    assert not matches_filter(wb, {"title": "Estratificación y movilidad social", "subjects": [], "abstract": ""})
+    assert matches_filter(wb, {"title": "Movilidad urbana en Lima", "subjects": [], "abstract": ""})
     assert matches_filter(SOURCES["vti"], {"title": "anything", "subjects": [], "abstract": ""})
 
 

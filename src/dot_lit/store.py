@@ -328,6 +328,16 @@ class Store:
             self.conn.execute("DETACH DATABASE fresh")
         return n
 
+    def prune_source(self, prefix: str, keep_ids: set[str]) -> int:
+        """Delete records with id prefix `prefix:` whose id is not in keep_ids."""
+        like = f"{prefix}:%"
+        existing = [r[0] for r in self.conn.execute("SELECT id FROM records WHERE id LIKE ?", (like,))]
+        doomed = [(i,) for i in existing if i not in keep_ids]
+        with self.conn:
+            self.conn.executemany("DELETE FROM record_collections WHERE record_id = ?", doomed)
+            self.conn.executemany("DELETE FROM records WHERE id = ?", doomed)
+        return len(doomed)
+
     def year_source_distribution(self) -> dict[str, int]:
         rows = self.conn.execute(
             "SELECT COALESCE(year_source, 'none') AS s, COUNT(*) AS n FROM records GROUP BY s ORDER BY n DESC"

@@ -318,6 +318,7 @@ def reindex(store: Store, *, source: Source | None = None, progress: Callable[[s
             if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == source.key]
     total = 0
     files_seen = 0
+    kept_ids: set[str] = set()
     for run in runs:
         files = sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.xml.gz"))
         if len(files) != run["pages"]:
@@ -327,12 +328,17 @@ def reindex(store: Store, *, source: Source | None = None, progress: Callable[[s
             recs = [d for d in (parse_record(r, source.key, source.collection) for r in root.findall(f".//{{{OAI_NS}}}record"))
                     if d and (d.get("deleted") or matches_filter(source, d))]
             store.upsert_records(recs)
+            kept_ids.update(r["id"] for r in recs if not r.get("deleted"))
             total += len(recs)
             files_seen += 1
             if files_seen % 100 == 0:
                 say(f"reindexed {files_seen} pages, {total} records")
-    say(f"reindex complete: {files_seen} pages, {total} records re-parsed, store has {store.count()} records")
-    return {"runs": [r["id"] for r in runs], "pages": files_seen, "records": total, "total_in_store": store.count()}
+    # Prune records of this source that the (possibly tightened) parser/filter no longer keeps.
+    prefix = "dot" if source.key == "rosap" else source.key
+    pruned = store.prune_source(prefix, kept_ids) if files_seen else 0
+    say(f"reindex complete: {files_seen} pages, {total} records re-parsed, {pruned} pruned, store has {store.count()} records")
+    return {"runs": [r["id"] for r in runs], "pages": files_seen, "records": total, "pruned": pruned,
+            "total_in_store": store.count()}
 
 
 def status(store: Store) -> dict:
