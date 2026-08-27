@@ -1,0 +1,32 @@
+[project]
+name = "dot-lit"
+version = "0.1.0"
+description = "MCP server giving searchable access to U.S. DOT grey literature (ROSA-P / National Transportation Library) via a locally harvested OAI-PMH index"
+readme = "README.md"
+authors = [{ name = "D. Alex Quistberg", email = "daq26@drexel.edu" }]
+license = { text = "MIT" }
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=1.2,<3",
+    "pypdf>=6.0",
+]
+keywords = ["mcp", "oai-pmh", "transportation", "grey-literature", "ntl", "rosap"]
+
+[project.urls]
+Homepage = "https://github.com/aquistbe/dot-lit"
+Repository = "https://github.com/aquistbe/dot-lit"
+
+[project.scripts]
+dot-lit = "dot_lit.cli:main"
+dot-lit-mcp = "dot_lit.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.23,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+# local data never belongs in the repo
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+raw/
+pdf/
+.DS_Store
