@@ -3,9 +3,9 @@
   "name": "io.github.aquistbe/transport-lit",
   "description": "Searchable index of transportation grey literature (ROSA-P/U.S. DOT, VTI, BASt, World Bank, CEPAL, IPEA, OpenAlex reports, CiNii, PubMed subset, TRID imports)",
   "repository": { "url": "https://github.com/aquistbe/transport-lit", "source": "github" },
-  "version_detail": { "version": "0.5.0" },
+  "version_detail": { "version": "0.5.1" },
   "packages": [
-    { "registry_name": "pypi", "name": "transport-lit", "version": "0.5.0", "runtime_hint": "uvx",
+    { "registry_name": "pypi", "name": "transport-lit", "version": "0.5.1", "runtime_hint": "uvx",
       "package_arguments": [{ "type": "positional", "value": "transport-lit-mcp" }],
       "environment_variables": [
         { "name": "TRANSPORT_LIT_DATA_DIR", "description": "Directory holding the SQLite index (run `transport-lit harvest` first)" },
