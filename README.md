@@ -213,6 +213,38 @@ document-retrieval endpoint, not a search or listing API, so a connector will ne
 enumeration strategy (e.g. the `DOT HS` numbers already present in ROSA-P
 `report_numbers`) rather than a crawl.
 
+### Beyond the U.S.: candidate sources assessed (2026-08-26)
+
+Probed live for (a) whether the holdings are *literature* rather than datasets and (b)
+whether there is machine access that fits this harvester. Counts are what the endpoints
+reported that day.
+
+| Source | Holdings | Machine access | Verdict |
+|--------|----------|----------------|---------|
+| **VTI (Sweden) via DiVA** `vti.diva-portal.org/dice/oai` | 7,474 records, set `all-vti`; road-safety research institute | OAI-PMH, `completeListSize`, `oai_dc` + `swepub_mods` + MARC21 | **Harvest — drop-in** |
+| **BASt (Germany) OPUS** `bast.opus.hbz-nrw.de/oai` | 2,987 records; federal highway research institute reports | OAI-PMH, `completeListSize`, `oai_dc` + `xMetaDissPlus` | **Harvest — drop-in** |
+| **World Bank Open Knowledge Repository** `openknowledge.worldbank.org/server/oai/request` | 40,332 records; 1,787 hits for "transport safety"; OAI set `transport` holds only 100 | OAI-PMH (DSpace 7) + DSpace REST `discover/search` | Harvest all, keep by subject; or REST query |
+| **WHO IRIS** `iris.who.int/oai/request` | 276,681 records; 3,334 hits for "road traffic"; no sets | OAI-PMH + DSpace REST search | REST query by subject (full OAI walk is 2,800 pages) |
+| **CEPAL repository** (Latin America) `repositorio.cepal.org/server/oai/request` | 52,199 records; no subject sets | OAI-PMH + DSpace REST | Harvest and filter by subject |
+| **MTT Chile Biblioteca Digital de Transportes** `biblioteca.mtt.gob.cl` | 5,820 `program_report` rows with name, description, category, files | Open Hasura GraphQL at `api.biblioteca.mtt.gob.cl/v1/graphql` (introspection enabled, unauthenticated read) | Harvestable via GraphQL; confirm terms of use with MTT first |
+| **OpenAlex** `api.openalex.org` | 2,604 works typed *report* matching "road safety"; 16,639 works of any type for "pedestrian safety" | Free REST API, cursor pagination | Best global *aggregator*; use as a source for non-U.S. grey lit and DOIs |
+| **GOV.UK (DfT)** `gov.uk/api/search.json` | 4,998 DfT items for "road safety research" | Free content API | Harvestable; needs document-type filtering |
+| **Spain, Centro de Documentación del Transporte** | 66,000 bibliographic records (45,000 monographs) in AbsysNet | OPAC only; site blocks non-browser clients (HTTP 403) | Out of scope unless the ministry exposes OAI/Z39.50 |
+| **TRIMIS (EU)** `trimis.ec.europa.eu` | EU-funded transport projects and results | Site up; no documented API (bulk open-data dumps exist) | Evaluate the open-data dump, not the site |
+| **IDB Publications, CAF Scioteca** | Development-bank transport reports | DSpace, but bot-blocked (403 / challenge page) | Out of scope unless access is granted |
+| **SWOV (Netherlands)** | Road-safety institute library | Bot-detection page on every path | Out of scope |
+| **ITF/OECD** | International Transport Forum reports | HTTP 403 to non-browser clients; no API | Out of scope (OECD iLibrary API is licensed) |
+| Transport Data Commons `portal.transport-data.org` | **Datasets** (32 institutions, 120+ countries), PortalJS | No API found (`/api/3` is 404) | Not literature |
+| ITDP Rapid Transit Database | **Dataset** (BRT/LRT/metro km per city); Google Sheet download | Download only | Not literature |
+| AASHTO TERI database | **Research-needs statements**, not completed reports | None | Not literature |
+| nismod/Africa-transport-database (GitHub) | **GIS dataset** of African transport infrastructure | Git clone | Not literature |
+| TRID | 1.5 M bibliographic records, international | None; export/backend access refused by policy | Out of scope |
+
+The three OAI-PMH repositories with `completeListSize` (VTI, BASt, World Bank OKR) fit the
+existing harvester with a source prefix and a per-source `metadataPrefix`; DSpace 7 sites
+also tolerate `from`/`until` and return proper `noRecordsMatch`, so the ROSA-P quirks in
+`oai.py` are already the harder case.
+
 ### TRID is out of scope
 
 TRID (<https://trid.trb.org>) has no public API, no OAI-PMH endpoint and no bulk export.
