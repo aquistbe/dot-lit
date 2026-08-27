@@ -31,8 +31,12 @@ def build(store: Store, out: Path, *, include_vectors: bool = True, exclude_sour
         shutil.rmtree(work)
     work.mkdir(parents=True)
     db_copy = work / "transport-lit.sqlite"
-    say("copying database (VACUUM INTO)…")
-    store.conn.execute("VACUUM INTO ?", (str(db_copy),))
+    say("copying database (online backup API)…")
+    dst = sqlite3.connect(db_copy)
+    store.conn.backup(dst)
+    dst.execute("PRAGMA journal_mode = DELETE")
+    dst.commit()
+    dst.close()
     if exclude_sources:
         c = sqlite3.connect(db_copy)
         # external-content FTS tables must be consistent before rows are deleted through them
