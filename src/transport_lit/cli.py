@@ -212,8 +212,12 @@ def cmd_cite(a: argparse.Namespace) -> int:
     try:
         g = Graph(s)
         if a.direction == "prefetch":
-            res = g.prefetch(sources=a.source.split(",") if a.source else None, limit=a.limit_records,
-                             progress=lambda m: print(m, file=sys.stderr, flush=True))
+            say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+            srcs = a.source.split(",") if a.source else None
+            if a.edges:
+                res = g.prefetch_edges(sources=srcs, limit=a.limit_records, progress=say)
+            else:
+                res = g.prefetch(sources=srcs, limit=a.limit_records, progress=say)
             print(json.dumps(res, indent=2))
             return 0
         d = g.references(a.id, refresh=a.refresh) if a.direction == "refs" else g.citations(a.id, refresh=a.refresh, only_in_index=a.in_index)
@@ -476,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("id", nargs="?", help="record id (refs/cites)")
     ct.add_argument("--source", help="prefetch: comma-separated sources")
     ct.add_argument("--limit-records", type=int, help="prefetch: max records to resolve")
+    ct.add_argument("--edges", action="store_true", help="prefetch: fetch reference lists for resolved works (one request each)")
     ct.add_argument("--in-index", action="store_true", help="cites: only citing works that are in this index")
     ct.add_argument("--refresh", action="store_true")
     ct.add_argument("--limit", type=int, default=30)

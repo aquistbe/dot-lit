@@ -243,8 +243,12 @@ class Graph:
         missing = [w for w in wids if not c.execute("SELECT 1 FROM works WHERE openalex_id = ? AND title != ''", (w,)).fetchone()]
         for i in range(0, len(missing), 50):
             chunk = missing[i: i + 50]
-            page = fetch("/works", {"filter": "openalex:" + "|".join(chunk), "per-page": 50,
-                                    "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
+            try:
+                page = fetch("/works", {"filter": "openalex:" + "|".join(chunk), "per-page": 50,
+                                        "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
+            except Exception as exc:  # noqa: BLE001
+                log.warning("hydrate batch failed: %s", exc)
+                continue
             seen = set()
             for cw in page.get("results", []):
                 row = _work_row(cw)
@@ -302,6 +306,47 @@ class Graph:
                 if (i // 50) % 20 == 0:
                     say(f"  {kind}: {min(i + 50, len(items))}/{len(items)} queried, {resolved} resolved so far")
         return {"queried": len(rows), "resolved": resolved, "failed_batches": failed, **self.stats()}
+
+    def prefetch_edges(self, *, sources: list[str] | None = None, limit: int | None = None,
+                       progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+        """Fetch reference lists for resolved works that have none yet (one request each).
+        Citing lists stay on demand — they are paginated and can run to thousands."""
+        say = progress or (lambda m: log.info(m))
+        c = self.s.conn
+        where = "WHERE record_id IS NOT NULL AND refs_fetched_at IS NULL"
+        params: list[Any] = []
+        if sources:
+            pfx = ["dot" if x in ("rosap", "dot") else x for x in sources]
+            where += " AND (" + " OR ".join("record_id LIKE ?" for _ in pfx) + ")"
+            params += [f"{p_}:%" for p_ in pfx]
+        rows = c.execute(f"SELECT openalex_id, record_id FROM works {where} ORDER BY cited_by_count DESC" + (f" LIMIT {int(limit)}" if limit else ""), params).fetchall()
+        say(f"fetching reference lists for {len(rows)} works")
+        done = failed = edges = 0
+        for r in rows:
+            wid = r[0]
+            try:
+                full = fetch(f"/works/{wid}", {"select": "id,referenced_works,cited_by_count"}) or {}
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                say(f"  {wid} failed ({exc}); continuing")
+                continue
+            refs = [_wid(x) for x in full.get("referenced_works") or []]
+            c.executemany("INSERT OR IGNORE INTO citations(citing, cited) VALUES (?, ?)", [(wid, x) for x in refs])
+            c.executemany("INSERT OR IGNORE INTO works(openalex_id, title) VALUES (?, '')", [(x,) for x in refs])
+            c.execute("UPDATE works SET refs_fetched_at = ?, cited_by_count = COALESCE(?, cited_by_count) WHERE openalex_id = ?",
+                      (utcnow(), full.get("cited_by_count"), wid))
+            edges += len(refs)
+            done += 1
+            if done % 200 == 0:
+                c.commit()
+                say(f"  {done}/{len(rows)} works, {edges} edges so far")
+        c.commit()
+        # link any newly seen cited works to local records (by openalex id / doi / pmid) in bulk
+        say("hydrating cited works that are still bare ids…")
+        bare = [r[0] for r in c.execute("SELECT openalex_id FROM works WHERE title = '' AND openalex_id IN (SELECT cited FROM citations)")]
+        self._hydrate(bare)
+        c.commit()
+        return {"works_processed": done, "failed": failed, "edges_added": edges, "hydrated": len(bare), **self.stats()}
 
     def cited_by_counts(self, record_ids: list[str]) -> dict[str, int]:
         if not record_ids:
