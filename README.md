@@ -240,6 +240,17 @@ reported that day.
 | nismod/Africa-transport-database (GitHub) | **GIS dataset** of African transport infrastructure | Git clone | Not literature |
 | TRID | 1.5 M bibliographic records, international | None; export/backend access refused by policy | Out of scope |
 
+**By region** (same-day probes; "open" means unauthenticated machine access confirmed):
+
+| Region | What exists | Access | Notes |
+|--------|-------------|--------|-------|
+| Europe | VTI (SE), BASt (DE) — above; **HAL** (FR): 74,952 items in the Université Gustave Eiffel/IFSTTAR collection, 117 `REPORT`-typed hits for "sécurité routière"; **OpenAIRE**: 82,053 publications for "road safety" (all types, Europe-wide aggregator); **EU Publications Office Cellar** SPARQL and **CORDIS** search JSON both answer | HAL REST (open), OpenAIRE REST (open), Cellar SPARQL (open), CORDIS JSON (open); DTU Orbit OAI 500, TU Delft OAI not found, TØI 403 | ITF/OECD's ITRD merged into TRID, so ITF content is reachable only through TRID |
+| Australia / NZ | **Figshare** OAI-PMH + REST (Monash/MUARC and other AU universities publish reports there); NZTA research report pages (HTML, 200); Austroads (403 to non-browsers); **APO** grey-literature observatory (403 to non-browsers); Trove API (needs key) | Figshare open; Trove key-gated; APO/Austroads bot-blocked | Figshare search for "road safety" reports returns mostly datasets/code — needs item-type + institution filtering to be useful |
+| Japan | **IRDB** (`irdb.nii.ac.jp/oai`, national aggregator of institutional repositories; JPCOAR 2.0 + oai_dc, 9 sets); **CiNii Research** OpenSearch: 16,547 hits for 交通安全; **J-STAGE** WebAPI: 9,786 for "traffic safety" (journals, incl. IATSS Research) | All open, no key | IRDB is the grey-lit route (theses, technical reports from universities); NILIM/PWRI ministry reports are web-only |
+| India | Shodhganga OAI not found at DSpace paths; CSIR-CRRI site is static HTML; IRC/MoRTH web-only | None found | Best coverage is OpenAlex/OpenAIRE for Indian journal output; no harvestable grey-lit source identified |
+| China | No open repository of MOT/RIOH reports; RIOH site is static; CNKI is licensed | None found | OpenAlex returns 15,416 works from CN institutions for "traffic safety" (journal literature) — that is the realistic route |
+| Latin America | **IPEA** (BR) `repositorio.ipea.gov.br/server/oai/request`: 14,400 records, 8,021 REST hits for "transporte"; **CEPAL** — above; **MTT Chile** GraphQL — above; IMT Mexico technical publications are HTML/PDF lists | IPEA/CEPAL OAI open; MTT GraphQL open; IDB/CAF bot-blocked; LA Referencia OAI not found at guessed URLs | SciELO OAI endpoints not found at legacy paths (journals anyway) |
+
 The three OAI-PMH repositories with `completeListSize` (VTI, BASt, World Bank OKR) fit the
 existing harvester with a source prefix and a per-source `metadataPrefix`; DSpace 7 sites
 also tolerate `from`/`until` and return proper `noRecordsMatch`, so the ROSA-P quirks in
