@@ -45,7 +45,7 @@ def _http_fetch(path: str, params: dict[str, Any] | None = None) -> dict[str, An
         r = _client.get(OPENALEX + path, params=p)
         if r.status_code == 404:
             return None
-        if r.status_code in (429, 500, 502, 503):
+        if r.status_code in (429, 500, 502, 503, 504):
             import time
             time.sleep(2.0 * (attempt + 1))
             continue
@@ -268,6 +268,7 @@ class Graph:
         rows = c.execute(f"SELECT id, doi FROM records {where} ORDER BY first_seen_at DESC" + (f" LIMIT {int(limit)}" if limit else ""), params).fetchall()
         say(f"prefetching OpenAlex identities for {len(rows)} records")
         resolved = 0
+        failed = 0
         groups: dict[str, list[tuple[str, str]]] = {"doi": [], "pmid": [], "openalex": []}
         for r in rows:
             rid, doi = r[0], (r[1] or "").lower()
@@ -282,8 +283,13 @@ class Graph:
                 chunk = items[i: i + 50]
                 flt = {"doi": "doi:" + "|".join(v for _, v in chunk), "pmid": "pmid:" + "|".join(v for _, v in chunk),
                        "openalex": "openalex:" + "|".join(v for _, v in chunk)}[kind]
-                page = fetch("/works", {"filter": flt, "per-page": 50,
-                                        "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
+                try:
+                    page = fetch("/works", {"filter": flt, "per-page": 50,
+                                            "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
+                except Exception as exc:  # noqa: BLE001 — one bad batch must not end the run
+                    failed += 1
+                    say(f"  batch {kind} {i // 50} failed ({exc}); continuing")
+                    continue
                 for w in page.get("results", []):
                     row = _work_row(w)
                     rid, match = self._local_for(row)
@@ -293,7 +299,7 @@ class Graph:
                 c.commit()
                 if (i // 50) % 20 == 0:
                     say(f"  {kind}: {min(i + 50, len(items))}/{len(items)} queried, {resolved} resolved so far")
-        return {"queried": len(rows), "resolved": resolved, **self.stats()}
+        return {"queried": len(rows), "resolved": resolved, "failed_batches": failed, **self.stats()}
 
     def cited_by_counts(self, record_ids: list[str]) -> dict[str, int]:
         if not record_ids:
