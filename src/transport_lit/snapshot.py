@@ -35,6 +35,9 @@ def build(store: Store, out: Path, *, include_vectors: bool = True, exclude_sour
     store.conn.execute("VACUUM INTO ?", (str(db_copy),))
     if exclude_sources:
         c = sqlite3.connect(db_copy)
+        # external-content FTS tables must be consistent before rows are deleted through them
+        c.execute("INSERT INTO records_fts(records_fts) VALUES ('rebuild')")
+        c.execute("INSERT INTO fulltext_fts(fulltext_fts) VALUES ('rebuild')")
         for src in exclude_sources:
             pfx = "dot" if src == "rosap" else src
             c.execute("DELETE FROM record_collections WHERE record_id LIKE ?", (f"{pfx}:%",))
