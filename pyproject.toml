@@ -1,6 +1,6 @@
 [project]
 name = "dot-lit"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server giving searchable access to U.S. DOT grey literature (ROSA-P / National Transportation Library) via a locally harvested OAI-PMH index"
 readme = "README.md"
 authors = [{ name = "D. Alex Quistberg", email = "daq26@drexel.edu" }]
