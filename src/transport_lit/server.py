@@ -115,8 +115,9 @@ def search_reports(
             vti, bast, wbokr, ipea, cepal, openalex, cinii, pubmed, trid).
         limit: Max hits (1-100). offset: for paging.
         mode: "hybrid" (default: keyword BM25 fused with semantic vectors when an embedding
-            index exists), "keyword", or "semantic" (meaning-based, cross-language; needs
-            `transport-lit embed` to have run). ``mode_used`` in the result says what actually ran.
+            index exists), "keyword", or "semantic" (meaning-based, cross-language). Semantic
+            results are capped at 50% from any one source unless `source`/`collection` is
+            set; use `source` to search one corpus by meaning. ``mode_used`` says what ran.
     Returns ranked hits; ``match_mode`` says whether all query terms matched (all_terms),
     the hit came from the any-term fallback, or from the semantic index.
     """

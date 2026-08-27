@@ -191,12 +191,31 @@ def cmd_snapshot(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(a: argparse.Namespace) -> int:
+    s = _store()
+    try:
+        rep = s.doctor()
+        if a.repair:
+            rep["repaired"] = s.repair()
+            rep["after"] = s.doctor()
+    finally:
+        s.close()
+    print(json.dumps(rep, indent=2))
+    ok = rep["integrity"] == "ok" and all(rep[k] == "ok" for k in ("records_fts", "fulltext_fts"))
+    return 0 if ok else 1
+
+
 def cmd_cite(a: argparse.Namespace) -> int:
     from .graph import Graph
 
     s = _store()
     try:
         g = Graph(s)
+        if a.direction == "prefetch":
+            res = g.prefetch(sources=a.source.split(",") if a.source else None, limit=a.limit_records,
+                             progress=lambda m: print(m, file=sys.stderr, flush=True))
+            print(json.dumps(res, indent=2))
+            return 0
         d = g.references(a.id, refresh=a.refresh) if a.direction == "refs" else g.citations(a.id, refresh=a.refresh, only_in_index=a.in_index)
     finally:
         s.close()
@@ -453,13 +472,19 @@ def main(argv: list[str] | None = None) -> int:
     sn.set_defaults(fn=cmd_snapshot)
 
     ct = sub.add_parser("cite", help="citation graph: references of, or works citing, a record (OpenAlex, cached)")
-    ct.add_argument("direction", choices=["refs", "cites"])
-    ct.add_argument("id")
+    ct.add_argument("direction", choices=["refs", "cites", "prefetch"])
+    ct.add_argument("id", nargs="?", help="record id (refs/cites)")
+    ct.add_argument("--source", help="prefetch: comma-separated sources")
+    ct.add_argument("--limit-records", type=int, help="prefetch: max records to resolve")
     ct.add_argument("--in-index", action="store_true", help="cites: only citing works that are in this index")
     ct.add_argument("--refresh", action="store_true")
     ct.add_argument("--limit", type=int, default=30)
     ct.add_argument("--json", action="store_true")
     ct.set_defaults(fn=cmd_cite)
+
+    dr = sub.add_parser("doctor", help="check database integrity, FTS indexes, stale runs, WAL; --repair fixes what is safe")
+    dr.add_argument("--repair", action="store_true")
+    dr.set_defaults(fn=cmd_doctor)
 
     dg = sub.add_parser("digest", help="markdown digest of records added in the last N days")
     dg.add_argument("--days", type=int, default=7)

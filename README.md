@@ -219,7 +219,13 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   the final rule keeps 976 at 18/20, IPEA 207 at ~16/20, CEPAL 1,165 at ~15/20. Recall is
   the price; loosen `min_subject_hits` in `sources.py` and run `transport-lit reindex --source
   <key>` (no network) if you want the other trade. The run notes record kept vs skipped.
-* `transport-lit reindex --source <key>` re-parses the cached pages **and prunes** records the
+* `transport-lit doctor [--repair]` checks SQLite integrity, both FTS indexes, runs stuck in
+`running`, impossible timestamps and WAL size, and repairs what is safe; the store also
+checkpoints the WAL on close. `transport-lit cite prefetch [--source …]` resolves every
+DOI/PMID/OpenAlex-bearing record to its OpenAlex work in bulk (50 per request) so
+`cited_by_count` is known for them without a per-record call.
+
+`transport-lit reindex --source <key>` re-parses the cached pages **and prunes** records the
   current parser/filter no longer keeps, so filter changes never need a re-harvest.
 
 ### Monthly rebuild and weekly updates (maintenance schedule)
@@ -524,6 +530,14 @@ transport-lit embed                         # default backend: fastembed, multil
 transport-lit embed --backend ollama --model qwen3-embedding:8b     # opt-in: any Ollama embedding model, truncated to 1024-d
 transport-lit search "programa de mejoramiento de conductores" --mode semantic
 ```
+
+Semantic results are **diversified by source**: no single source may fill more than half
+of the requested results unless `source`/`collection` narrows the search
+(`TRANSPORT_LIT_SEMANTIC_PER_SOURCE`). Measured reason: CiNii is a third of the index and
+holds thousands of short English titles ("Pedestrian safety problems and countermeasures")
+that sit nearer a short query than any abstract-bearing record; the with/without-abstract
+cosine gap is only ~0.01, so this is corpus composition, not a length artifact, and a cap is
+the honest remedy. `mode="semantic"` is the specialist setting; `hybrid` stays the default.
 
 Hybrid fusion weights the keyword list 1.0 and the semantic list 0.7
 (`TRANSPORT_LIT_SEMANTIC_WEIGHT`), and a semantic-only candidate must clear cosine 0.5

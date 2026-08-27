@@ -70,3 +70,10 @@ def test_hybrid_search_and_fallback(tmp_path, monkeypatch):
 def test_rrf():
     f = E.rrf([["a", "b"], ["b", "c"]])
     assert f["b"] > f["a"] > f["c"]
+
+
+def test_diversify_caps_one_source():
+    ranked = [f"cinii:{i}" for i in range(10)] + ["dot:1", "pubmed:1", "vti:1"]
+    out = E.diversify(ranked, 6, share=0.5)
+    assert out[:6].count("cinii:0") == 1 and sum(r.startswith("cinii") for r in out[:6]) == 3
+    assert out[:6][3:] == ["dot:1", "pubmed:1", "vti:1"] and len(out) == len(ranked)

@@ -252,6 +252,49 @@ class Graph:
                 if w not in seen:
                     c.execute("INSERT OR IGNORE INTO works(openalex_id, title) VALUES (?, '')", (w,))
 
+    def prefetch(self, *, sources: list[str] | None = None, limit: int | None = None,
+                 progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+        """Resolve records that carry a DOI (or are OpenAlex/PubMed items) in bulk — 50 per
+        request — so `cited_by_count` is known for them and later edge fetches are cheap.
+        Title-only records are left to on-demand resolution."""
+        say = progress or (lambda m: log.info(m))
+        c = self.s.conn
+        where = "WHERE (doi != '' OR id LIKE 'pubmed:%' OR id LIKE 'openalex:%') AND id NOT IN (SELECT record_id FROM works WHERE record_id IS NOT NULL)"
+        params: list[Any] = []
+        if sources:
+            pfx = ["dot" if x in ("rosap", "dot") else x for x in sources]
+            where += " AND (" + " OR ".join("id LIKE ?" for _ in pfx) + ")"
+            params += [f"{p_}:%" for p_ in pfx]
+        rows = c.execute(f"SELECT id, doi FROM records {where} ORDER BY first_seen_at DESC" + (f" LIMIT {int(limit)}" if limit else ""), params).fetchall()
+        say(f"prefetching OpenAlex identities for {len(rows)} records")
+        resolved = 0
+        groups: dict[str, list[tuple[str, str]]] = {"doi": [], "pmid": [], "openalex": []}
+        for r in rows:
+            rid, doi = r[0], (r[1] or "").lower()
+            if rid.startswith("openalex:"):
+                groups["openalex"].append((rid, rid.split(":", 1)[1]))
+            elif doi:
+                groups["doi"].append((rid, doi))
+            elif rid.startswith("pubmed:"):
+                groups["pmid"].append((rid, rid.split(":", 1)[1]))
+        for kind, items in groups.items():
+            for i in range(0, len(items), 50):
+                chunk = items[i: i + 50]
+                flt = {"doi": "doi:" + "|".join(v for _, v in chunk), "pmid": "pmid:" + "|".join(v for _, v in chunk),
+                       "openalex": "openalex:" + "|".join(v for _, v in chunk)}[kind]
+                page = fetch("/works", {"filter": flt, "per-page": 50,
+                                        "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
+                for w in page.get("results", []):
+                    row = _work_row(w)
+                    rid, match = self._local_for(row)
+                    if rid:
+                        self._upsert_work(row, record_id=rid, match=match)
+                        resolved += 1
+                c.commit()
+                if (i // 50) % 20 == 0:
+                    say(f"  {kind}: {min(i + 50, len(items))}/{len(items)} queried, {resolved} resolved so far")
+        return {"queried": len(rows), "resolved": resolved, **self.stats()}
+
     def cited_by_counts(self, record_ids: list[str]) -> dict[str, int]:
         if not record_ids:
             return {}

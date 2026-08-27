@@ -290,6 +290,27 @@ def semantic_candidates(store: Store, query: str, k: int) -> list[tuple[str, flo
 
 
 SEMANTIC_WEIGHT = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_WEIGHT", "0.7"))  # keyword list weight is 1.0
+SEMANTIC_PER_SOURCE = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_PER_SOURCE", "0.5"))  # max share of one source in semantic results
+
+
+def diversify(ranked: list[str], limit: int, share: float = SEMANTIC_PER_SOURCE) -> list[str]:
+    """Cap any one source (id prefix) at `share` of the first `limit` results; overflow is
+    appended afterwards in score order.  Counters corpus-composition dominance (CiNii is a
+    third of the index and full of short titles that nearly equal a short query)."""
+    if share >= 1.0 or limit <= 0:
+        return ranked
+    cap = max(3, int(round(limit * share)))
+    head: list[str] = []
+    tail: list[str] = []
+    seen: dict[str, int] = {}
+    for rid in ranked:
+        src = rid.split(":", 1)[0]
+        if len(head) < limit and seen.get(src, 0) < cap:
+            head.append(rid)
+            seen[src] = seen.get(src, 0) + 1
+        else:
+            tail.append(rid)
+    return head + tail
 SEMANTIC_MIN = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_MIN", "0.5"))        # cosine floor for semantic-only hits
 
 
@@ -311,7 +332,9 @@ def hybrid_search(store: Store, query: str, *, mode: str = "hybrid", limit: int 
     sem: list[tuple[str, float]] = []
     if mode in ("hybrid", "semantic"):
         try:
-            sem = semantic_candidates(store, query, k=want * 5)
+            # a wide pool so diversification has other sources to draw from (dot product is
+            # over the whole matrix anyway; only the top-k bookkeeping grows)
+            sem = semantic_candidates(store, query, k=max(want * 10, 300))
         except Exception as exc:  # noqa: BLE001
             log.warning("semantic search unavailable: %s", exc)
             sem = []
@@ -322,6 +345,8 @@ def hybrid_search(store: Store, query: str, *, mode: str = "hybrid", limit: int 
     sem_ids = store.filter_ids([rid for rid, _ in sem], **filters)
     sem_scores = {rid: sc for rid, sc in sem}
     sem_rank = [rid for rid, _ in sem if rid in sem_ids]
+    if not filters.get("sources") and not filters.get("collection"):
+        sem_rank = diversify(sem_rank, want)
     if mode == "semantic":
         ordered = sem_rank
     else:

@@ -78,3 +78,20 @@ def test_cjk_substring_fallback(tmp_path):
     hits = s.search("交通事故")
     assert [h["id"] for h in hits] == ["cinii:1"] and hits[0]["match_mode"] == "cjk_substring"
     s.close()
+
+
+def test_lookup_text_fallback_and_doctor(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_records([{**_rec(1, "Countermeasures That Work [Traffic Tech]", "NHTSA has published Report No. DOT HS 813 097, a guide.", 2021)}])
+    hits = s.lookup("DOT HS 813 097")
+    assert hits and hits[0]["id"] == "dot:1" and hits[0].get("lookup_match") == "text"
+    s.conn.execute("INSERT INTO harvest_runs(source, kind, started_at, finished_at, status) VALUES ('x','full','2026-01-02T00:00:00Z','2026-01-01T00:00:00Z','complete')")
+    s.conn.execute("INSERT INTO harvest_runs(source, kind, started_at, status) VALUES ('y','full','2020-01-01T00:00:00Z','running')")
+    s.conn.commit()
+    rep = s.doctor()
+    assert rep["integrity"] == "ok" and len(rep["runs_with_impossible_times"]) == 1 and len(rep["runs_still_running"]) == 1
+    done = s.repair()
+    assert any("finish time cleared" in d for d in done) and any("marked failed" in d for d in done)
+    after = s.doctor()
+    assert not after["runs_with_impossible_times"] and not after["runs_still_running"]
+    s.close()

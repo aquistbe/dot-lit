@@ -169,7 +169,54 @@ class Store:
         self.conn.commit()
 
     def close(self) -> None:
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass  # another connection holds the database; the WAL stays valid and will be replayed
         self.conn.close()
+
+    def doctor(self) -> dict[str, Any]:
+        """Consistency report: SQLite integrity, FTS indexes, stale runs, impossible timestamps, WAL."""
+        c = self.conn
+        rep: dict[str, Any] = {"integrity": c.execute("PRAGMA integrity_check").fetchone()[0]}
+        for fts in ("records_fts", "fulltext_fts"):
+            try:
+                c.execute(f"INSERT INTO {fts}({fts}) VALUES('integrity-check')")
+                rep[fts] = "ok"
+            except sqlite3.DatabaseError as exc:
+                rep[fts] = f"inconsistent: {exc}"
+        rep["runs_still_running"] = [dict(r) for r in c.execute(
+            "SELECT id, source, started_at FROM harvest_runs WHERE status='running' AND started_at < datetime('now', '-6 hours')")]
+        rep["runs_with_impossible_times"] = [dict(r) for r in c.execute(
+            "SELECT id, source, started_at, finished_at FROM harvest_runs WHERE finished_at IS NOT NULL AND finished_at < started_at")]
+        wal = self.path.with_name(self.path.name + "-wal")
+        rep["wal_bytes"] = wal.stat().st_size if wal.exists() else 0
+        rep["records"] = self.count()
+        return rep
+
+    def repair(self) -> list[str]:
+        """Fix what doctor() can fix safely: rebuild inconsistent FTS indexes, fail runs stuck
+        in 'running', clear impossible finish times, checkpoint the WAL."""
+        done: list[str] = []
+        rep = self.doctor()
+        for fts in ("records_fts", "fulltext_fts"):
+            if rep[fts] != "ok":
+                self.conn.execute(f"INSERT INTO {fts}({fts}) VALUES('rebuild')")
+                done.append(f"rebuilt {fts}")
+        for r in rep["runs_still_running"]:
+            self.conn.execute("UPDATE harvest_runs SET status='failed', finished_at=?, notes=json_insert(COALESCE(notes,'[]'), '$[#]', 'marked failed by doctor: still running after 6 h') WHERE id=?",
+                              (utcnow(), r["id"]))
+            done.append(f"run {r['id']} marked failed")
+        for r in rep["runs_with_impossible_times"]:
+            self.conn.execute("UPDATE harvest_runs SET finished_at=NULL WHERE id=?", (r["id"],))
+            done.append(f"run {r['id']} finish time cleared")
+        self.conn.commit()
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            done.append("wal checkpointed")
+        except sqlite3.OperationalError:
+            done.append("wal checkpoint skipped (database busy)")
+        return done
 
     # -- meta ---------------------------------------------------------------------------
     def get_meta(self, key: str, default: str | None = None) -> str | None:
@@ -352,7 +399,14 @@ class Store:
                 return [rec]
         if not rows:
             rows = self.conn.execute("SELECT * FROM records WHERE report_numbers LIKE ? LIMIT 20", (f"%{ident}%",)).fetchall()
-        return [self._row_to_record(r) for r in rows]
+        out = [self._row_to_record(r) for r in rows]
+        if not out and len(ident) >= 5:
+            # report numbers often live only in the abstract/title of legacy records
+            for h in self.search(f'"{ident}"', limit=10):
+                if h.get("match_mode") == "all_terms":
+                    h["lookup_match"] = "text"
+                    out.append(h)
+        return out
 
     def similar(self, record_id: str, limit: int = 10) -> list[dict[str, Any]]:
         rec = self.get_record(record_id)
