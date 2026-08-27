@@ -82,6 +82,15 @@ class FastEmbedBackend:
         self.dim = vecs.shape[1]
         return vecs
 
+    def embed_stream(self, texts: Iterable[str], batch: int = 64) -> Iterable[np.ndarray]:
+        """Lazy, data-parallel encoding for large runs (fastembed spawns worker processes
+        once per call, so one long call beats many short ones)."""
+        m = self._load()
+        parallel = int(os.environ.get("TRANSPORT_LIT_EMBED_PARALLEL") or os.environ.get("DOT_LIT_EMBED_PARALLEL")
+                       or max(1, min(8, (os.cpu_count() or 2) - 2)))
+        for v in m.embed(texts, batch_size=batch, parallel=parallel if parallel > 1 else None):
+            yield _norm(np.asarray(v, dtype=np.float32)[None, :])[0]
+
     def embed_query(self, text: str) -> np.ndarray:
         return self.embed([text])[0]
 
@@ -119,6 +128,16 @@ class OllamaBackend:
         vecs = _norm(vecs)
         self.dim = vecs.shape[1]
         return vecs
+
+    def embed_stream(self, texts: Iterable[str], batch: int = 32) -> Iterable[np.ndarray]:
+        buf: list[str] = []
+        for t in texts:
+            buf.append(t)
+            if len(buf) >= batch:
+                yield from self.embed(buf)
+                buf = []
+        if buf:
+            yield from self.embed(buf)
 
     def embed_query(self, text: str) -> np.ndarray:
         if "qwen3" in self.model:
@@ -241,14 +260,18 @@ def embed_records(store: Store, backend: FastEmbedBackend | OllamaBackend, *, re
     t0 = time.time()
     buf_ids: list[str] = []
     buf_vecs: list[np.ndarray] = []
-    for i in range(0, len(todo), batch):
-        chunk = todo[i: i + batch]
-        vecs = backend.embed([t for _, t in chunk])
-        buf_ids.extend(rid for rid, _ in chunk)
-        buf_vecs.append(vecs)
-        done += len(chunk)
-        if sum(len(v) for v in buf_vecs) >= 5000 or done == len(todo):
-            index.add(buf_ids, np.concatenate(buf_vecs), {"backend": backend.name, "model": backend.model})
+    stream = getattr(backend, "embed_stream", None)
+    if stream is None:  # simple backends: batch calls
+        def stream(texts, batch=batch):
+            texts = list(texts)
+            for i in range(0, len(texts), batch):
+                yield from backend.embed(texts[i: i + batch])
+    for (rid, _), vec in zip(todo, stream((t for _, t in todo), batch)):
+        buf_ids.append(rid)
+        buf_vecs.append(vec)
+        done += 1
+        if len(buf_vecs) >= 5000 or done == len(todo):
+            index.add(buf_ids, np.stack(buf_vecs), {"backend": backend.name, "model": backend.model})
             buf_ids, buf_vecs = [], []
             rate = done / max(time.time() - t0, 1e-6)
             say(f"{done}/{len(todo)} embedded ({rate:.0f}/s, ~{(len(todo) - done) / max(rate, 1e-6) / 60:.0f} min left)")
