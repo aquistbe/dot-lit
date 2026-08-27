@@ -270,6 +270,17 @@ page and falls back to the datastream convention `/view/dot/{n}/dot_{n}_DS1.pdf`
 
 ## Verification (2026-08-26)
 
+**v0.4.0 semantic search.** 342,462 vectors (fastembed multilingual MiniLM-L12, 384-d,
+data-parallel at 94 records/s on 8 cores — 60 min for the corpus). Cross-language check:
+`"elderly pedestrian crashes at night"` in `semantic` mode returns, among its top 8, three
+Japanese-language CiNii reports (夜間 高齢歩行者 死亡事故 analyses, 1995–2011) beside PubMed
+and English CiNii items; vocabulary check: `"point system for problem drivers license
+suspension recidivism"` finds ROSA-P's 1997 California vehicle-impoundment evaluation and
+1986 administrative-revocation report, which share no query words. Hybrid latency ≈ 0.6 s
+(query encoding dominates), keyword ≈ 25 ms. Operational lesson recorded here so nobody
+repeats it: never delete a SQLite `-wal` file while another process (e.g. a running MCP
+server) has the database open — it holds committed data not yet checkpointed.
+
 **v0.3.0 API sources.** OpenAlex: 58 pages, 11,448 reports (10 topics, `type:report`),
 1,428 with PDF links. CiNii: 730 pages, 144,348 hits over 20 queries, 118,609 unique. PubMed:
 105,028 articles in 17 date slices (E-utilities caps `retstart` at 10,000, so slices are
@@ -487,6 +498,11 @@ transport-lit embed --backend ollama --model qwen3-embedding:8b     # opt-in: an
 transport-lit search "programa de mejoramiento de conductores" --mode semantic
 ```
 
+Hybrid fusion weights the keyword list 1.0 and the semantic list 0.7
+(`TRANSPORT_LIT_SEMANTIC_WEIGHT`), and a semantic-only candidate must clear cosine 0.5
+(`TRANSPORT_LIT_SEMANTIC_MIN`); that keeps precise queries precise while `mode="semantic"`
+stays the recall / cross-language setting.
+
 `embed` only processes records that have no vector yet, so after the first pass the weekly
 harvest adds seconds. Vectors live in `$TRANSPORT_LIT_DATA_DIR/vectors/<backend-model>/` as a
 memory-mapped float16 matrix (342k × 384 ≈ 260 MB); search is a chunked dot product, no
@@ -507,9 +523,17 @@ never run the full pass at all.
 
 ### Snapshots: skip the harvest
 
-`transport-lit snapshot build transport-lit-YYYY-MM.tar.gz` packs the SQLite index plus the active
-vectors; `transport-lit snapshot install <url-or-file>` unpacks one into a fresh
-`TRANSPORT_LIT_DATA_DIR`, after which weekly incremental harvests keep it current. Snapshots
+```bash
+uv tool install "transport-lit[semantic]"
+transport-lit snapshot install https://github.com/aquistbe/transport-lit/releases/download/v0.4.0/transport-lit-2026-08.tar.gz
+transport-lit mcp-config claude-desktop     # or install-claude-desktop --write
+```
+
+That is a complete, searchable install in minutes: 224k records (everything except CiNii and
+TRID) with vectors. `transport-lit snapshot build <file.tar.gz>` packs the SQLite index plus the
+active vectors; `snapshot install <url-or-file>` unpacks one into a fresh
+`TRANSPORT_LIT_DATA_DIR`, after which weekly incremental harvests keep it current (the
+snapshot carries the harvest bookkeeping, so `harvest --source all` knows where to resume). Snapshots
 leave out **CiNii** (its API terms require registration and are silent on redistribution)
 and **TRID** imports (TRB's terms); users harvest those themselves. Releases carry a
 snapshot when one was built.

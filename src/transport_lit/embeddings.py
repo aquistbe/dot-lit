@@ -289,11 +289,17 @@ def semantic_candidates(store: Store, query: str, k: int) -> list[tuple[str, flo
     return index.search(backend.embed_query(query), k=k)
 
 
-def rrf(rankings: Iterable[list[str]], k: int = 60) -> dict[str, float]:
+SEMANTIC_WEIGHT = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_WEIGHT", "0.7"))  # keyword list weight is 1.0
+SEMANTIC_MIN = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_MIN", "0.5"))        # cosine floor for semantic-only hits
+
+
+def rrf(rankings: Iterable[list[str]], k: int = 60, weights: Iterable[float] | None = None) -> dict[str, float]:
     scores: dict[str, float] = {}
-    for ranking in rankings:
+    ws = list(weights) if weights is not None else None
+    for i, ranking in enumerate(rankings):
+        w = ws[i] if ws else 1.0
         for rank, rid in enumerate(ranking):
-            scores[rid] = scores.get(rid, 0.0) + 1.0 / (k + rank + 1)
+            scores[rid] = scores.get(rid, 0.0) + w / (k + rank + 1)
     return scores
 
 
@@ -319,7 +325,10 @@ def hybrid_search(store: Store, query: str, *, mode: str = "hybrid", limit: int 
     if mode == "semantic":
         ordered = sem_rank
     else:
-        fused = rrf([[h["id"] for h in keyword], sem_rank])
+        kw_ids = {h["id"] for h in keyword}
+        # semantic-only candidates must clear a cosine floor; keyword hits never need to
+        sem_for_fusion = [rid for rid in sem_rank if rid in kw_ids or sem_scores.get(rid, 0.0) >= SEMANTIC_MIN]
+        fused = rrf([[h["id"] for h in keyword], sem_for_fusion], weights=[1.0, SEMANTIC_WEIGHT])
         ordered = sorted(fused, key=lambda r: -fused[r])
     kw_by_id = {h["id"]: h for h in keyword}
     kw_rank = {h["id"]: i + 1 for i, h in enumerate(keyword)}
