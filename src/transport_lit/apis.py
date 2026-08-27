@@ -177,7 +177,14 @@ def cinii_pages(client: Client, since: str | None, say: Callable[[str], None]) -
             params = {"q": q, "format": "json", "count": 200, "start": start, "appid": appid}
             if since:
                 params["from"] = since[:4]
-            raw = _get(client, limiter, "https://cir.nii.ac.jp/opensearch/all", params)
+            try:
+                raw = _get(client, limiter, "https://cir.nii.ac.jp/opensearch/all", params)
+            except RuntimeError as exc:
+                if "503" in str(exc) and page == 0:
+                    raise RuntimeError("CiNii answered 503 to the first request: it does this when the application "
+                                       "ID is unknown or not yet active. Check the ID at "
+                                       f"{CINII_REGISTER_URL} (it must be registered for CiNii Research) and retry later.") from exc
+                raise
             d = json.loads(raw)
             items = d.get("items") or []
             if total is None:

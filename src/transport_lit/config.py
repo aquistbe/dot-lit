@@ -13,6 +13,25 @@ from pathlib import Path
 from . import __version__
 
 
+ENV_FILE = Path(os.environ.get("TRANSPORT_LIT_ENV_FILE", "~/.config/transport-lit/env")).expanduser()
+
+
+def _load_env_file() -> None:
+    """KEY=VALUE lines (e.g. TRANSPORT_LIT_CONTACT, TRANSPORT_LIT_CINII_APPID, NCBI_API_KEY);
+    real environment variables win.  Keeps per-user ids out of shell profiles and plists."""
+    if not ENV_FILE.exists():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env_file()
+
+
 def _env(name: str, default: str = "") -> str:
     """TRANSPORT_LIT_* wins; DOT_LIT_* (the project's original name) is still honoured."""
     return os.environ.get(f"TRANSPORT_LIT_{name}", os.environ.get(f"DOT_LIT_{name}", default))

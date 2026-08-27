@@ -134,7 +134,10 @@ Restart Claude Desktop afterwards. For Claude Code: `claude mcp add transport-li
 | `TRANSPORT_LIT_EMBED_BACKEND` / `TRANSPORT_LIT_EMBED_MODEL` / `TRANSPORT_LIT_EMBED_DIM` | fastembed / MiniLM-L12 / 1024 | Semantic search backend, model, Ollama truncation |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for the `ollama` backend |
 
-No credentials are used or stored anywhere; every request goes to public endpoints.
+Variables can also live in `~/.config/transport-lit/env` as `KEY=VALUE` lines (real
+environment variables win); that is where a NII application ID or NCBI key belongs, so the
+launchd jobs, the MCP server and manual runs all see it. No credentials are required; all
+endpoints are public.
 
 ### Install from PyPI (no clone)
 
