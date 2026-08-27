@@ -20,8 +20,27 @@ DC_NS = "http://purl.org/dc/elements/1.1/"
 OAI_DC_NS = "http://www.openarchives.org/OAI/2.0/oai_dc/"
 
 _YEAR_RE = re.compile(r"\b(1[6-9]\d\d|20\d\d)\b")
+_BARE_YEAR_RE = re.compile(r"^(19\d\d|20\d\d)$")
+FALLBACK_YEAR_MIN, FALLBACK_YEAR_MAX = 1900, 2027  # inferred years outside this are rejected
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"<>]+)", re.I)
 _MULTI_SPLIT = re.compile(r"\s*;\s*")
+# Short line that looks like a report/contract number: starts with letters, has a digit,
+# few words, no sentence punctuation.  e.g. "SPR 634", "FHWA-OR-RD-08-06", "DOT HS 811 727".
+_REPORT_NO_RE = re.compile(r"^[A-Za-z][A-Za-z&./ -]{0,24}[-\s/]?\d[\w./ -]*$")
+_CORPORATE_HINTS = re.compile(
+    r"\b(universit|institute|dept\.?|department|administration|council|center|centre|commission|"
+    r"office|bureau|agency|board|company|corp\.?|corporation|inc\.?|associates|laboratory|"
+    r"division|research unit|program|services|authority|society|association|consultants?|group|"
+    r"united states|u\.s\.)\b", re.I)
+
+
+def looks_like_report_number(v: str) -> bool:
+    return len(v) <= 40 and len(v.split()) <= 6 and not v.endswith((".", ",", ";", ":")) and bool(
+        _REPORT_NO_RE.match(v))
+
+
+def looks_corporate(name: str) -> bool:
+    return bool(_CORPORATE_HINTS.search(name))
 
 
 def _local(tag: str) -> str:
@@ -76,21 +95,71 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
     # Title
     title = get("title")[0] if get("title") else ""
 
-    # Authors: personal authors first, then plain dc:creator (often corporate).
-    authors = _uniq(get("contributor.author") + get("creator"))
-    corporate = _uniq(get("contributor.creator"))
+    # Two metadata profiles coexist in ROSA-P (observed 2026-08-26):
+    #  * "qualified": contributor.author / contributor.creator / description.abstract /
+    #    identifier.uri / date  (~54 % of records)
+    #  * "legacy":    creator (people and organisations mixed) / description (report
+    #    number lines followed by the abstract split into lines) / coverage, and NO date
+    #    (~46 % of records).
+    authors = list(get("contributor.author"))
+    corporate = list(get("contributor.creator"))
+    for c in get("creator"):
+        (corporate if looks_corporate(c) else authors).append(c)
+    authors = _uniq(authors)
+    corporate = _uniq(corporate)
     contributors = _uniq(get("contributor.collaborator") + get("contributor") + get("contributor.consultant"))
 
-    # Year
+    # Description / abstract / report numbers embedded in description
+    legacy_report_numbers: list[str] = []
+    if get("description.abstract"):
+        abstract = " ".join(get("description.abstract"))
+        notes = list(get("description"))
+    else:
+        text_lines: list[str] = []
+        for v in get("description"):
+            (legacy_report_numbers if looks_like_report_number(v) else text_lines).append(v)
+        abstract = " ".join(text_lines)
+        notes = []
+    toc = " ".join(get("description.tableOfContents"))
+
+    # Year: dc:date first.  Legacy records have no dc:date, so fall back in order to
+    #   (1) a description line that is a bare year ("2018"),
+    #   (2) a year in the title ("..., Sixth Edition, 2011"),
+    #   (3) a year in a short description line that is not a report number
+    #       ("Final report; June 2007" yes, "RC-1600" no).
+    # Inferred years must fall in FALLBACK_YEAR_MIN..MAX; `year_source` records the route.
     date_raw = get("date")[0] if get("date") else ""
     year: int | None = None
+    year_source: str | None = None
     if date_raw:
         m = _YEAR_RE.search(date_raw)
         if m:
-            year = int(m.group(1))
+            year, year_source = int(m.group(1)), "date"
 
-    abstract = " ".join(get("description.abstract")) or " ".join(get("description"))
-    toc = " ".join(get("description.tableOfContents"))
+    def _plausible(y: int) -> bool:
+        return FALLBACK_YEAR_MIN <= y <= FALLBACK_YEAR_MAX
+
+    desc_lines = get("description") + notes
+    if year is None:
+        for v in desc_lines:
+            m = _BARE_YEAR_RE.match(v)
+            if m and _plausible(int(m.group(1))):
+                year, year_source = int(m.group(1)), "description"
+                break
+    if year is None:
+        for m in _YEAR_RE.finditer(title):
+            if _plausible(int(m.group(1))):
+                year, year_source = int(m.group(1)), "title"
+                break
+    if year is None:
+        for v in desc_lines:
+            if len(v) <= 60 and not looks_like_report_number(v):
+                for m in _YEAR_RE.finditer(v):
+                    if _plausible(int(m.group(1))):
+                        year, year_source = int(m.group(1)), "description"
+                        break
+            if year is not None:
+                break
 
     # Identifiers: DOI vs. report numbers vs. URLs
     doi = ""
@@ -109,7 +178,7 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
         if v == local_id or v.startswith("dot:"):
             continue
         report_numbers.append(v)
-    report_numbers = _uniq(report_numbers)
+    report_numbers = _uniq(report_numbers + legacy_report_numbers)
 
     landing_url = f"{ROSAP_VIEW_BASE}{numeric}"
 
@@ -131,6 +200,7 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
         "corporate_authors": corporate,
         "contributors": contributors,
         "year": year,
+        "year_source": year_source,
         "date_raw": date_raw,
         "abstract": abstract,
         "table_of_contents": toc,
@@ -143,6 +213,7 @@ def parse_record(rec: ET.Element) -> dict[str, Any] | None:
         "doi": doi,
         "report_numbers": report_numbers,
         "other_urls": _uniq(other_urls),
+        "notes": " ; ".join(notes),
         "spatial": " ; ".join(get("coverage.spatial") + get("coverage")),
         "source": " ; ".join(get("source")),
         "rights": " ; ".join(get("rights.accessRights")),

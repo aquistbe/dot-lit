@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, config
-from .harvest import harvest, make_client, status
+from .harvest import harvest, make_client, reindex, status
 from .store import Store
 
 
@@ -42,6 +42,16 @@ def cmd_harvest(a: argparse.Namespace) -> int:
         s.close()
     print(json.dumps(res.__dict__, indent=2))
     return 0 if res.status == "complete" else 1
+
+
+def cmd_reindex(_: argparse.Namespace) -> int:
+    s = _store()
+    try:
+        res = reindex(s, progress=lambda m: print(m, file=sys.stderr, flush=True))
+    finally:
+        s.close()
+    print(json.dumps(res, indent=2))
+    return 0
 
 
 def cmd_status(_: argparse.Namespace) -> int:
@@ -157,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--max-pages", type=int, help="stop early (marks run failed/partial); for testing")
     h.set_defaults(fn=cmd_harvest)
 
+    sub.add_parser("reindex", help="re-parse cached raw OAI pages into the index (no network)").set_defaults(fn=cmd_reindex)
     sub.add_parser("status", help="record counts, last harvest, coverage by year").set_defaults(fn=cmd_status)
 
     q = sub.add_parser("search", help="search the local index")

@@ -28,13 +28,15 @@ Completeness / truncation handling
 
 from __future__ import annotations
 
+import gzip
 import logging
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from . import config
-from .dc import parse_record
+from .dc import OAI_NS, parse_record
 from .oai import BadResumptionToken, NoRecordsMatch, OAIClient, TransportError, TruncatedList
 from .store import Store, utcnow
 
@@ -223,6 +225,33 @@ def harvest(
             client.close()
 
 
+def reindex(store: Store, *, progress: Callable[[str], None] | None = None) -> dict:
+    """Re-parse the cached raw OAI pages (last complete full harvest and every complete run
+    after it) and upsert them.  Lets the parser evolve without re-harvesting."""
+    say = progress or (lambda m: log.info(m))
+    last_full = store.last_complete_run(SOURCE, "full")
+    if not last_full:
+        raise RuntimeError("no complete full harvest to reindex from")
+    runs = [r for r in reversed(store.last_runs(10_000))
+            if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == SOURCE]
+    total = 0
+    files_seen = 0
+    for run in runs:
+        files = sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.xml.gz"))
+        if len(files) != run["pages"]:
+            say(f"warning: run {run['id']} has {len(files)} cached pages but recorded {run['pages']}")
+        for f in files:
+            root = ET.fromstring(gzip.decompress(f.read_bytes()))
+            recs = [d for d in (parse_record(r) for r in root.findall(f".//{{{OAI_NS}}}record")) if d]
+            store.upsert_records(recs)
+            total += len(recs)
+            files_seen += 1
+            if files_seen % 100 == 0:
+                say(f"reindexed {files_seen} pages, {total} records")
+    say(f"reindex complete: {files_seen} pages, {total} records re-parsed, store has {store.count()} records")
+    return {"runs": [r["id"] for r in runs], "pages": files_seen, "records": total, "total_in_store": store.count()}
+
+
 def status(store: Store) -> dict:
     total = store.count()
     last_runs = store.last_runs(5)
@@ -237,6 +266,7 @@ def status(store: Store) -> dict:
         "total_records": total,
         "records_with_year": sum(known.values()),
         "records_without_year": years.get("unknown", 0),
+        "year_source": store.year_source_distribution(),
         "year_range": [min(known), max(known)] if known else None,
         "last_harvest": {
             "run_id": last_complete["id"], "kind": last_complete["kind"],

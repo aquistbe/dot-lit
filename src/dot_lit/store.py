@@ -23,9 +23,11 @@ CREATE TABLE IF NOT EXISTS records (
     corporate_authors TEXT, -- JSON list
     contributors    TEXT,   -- JSON list
     year            INTEGER,
+    year_source     TEXT,   -- date | title | description | NULL
     date_raw        TEXT,
     abstract        TEXT,
     table_of_contents TEXT,
+    notes           TEXT,
     publisher       TEXT,
     doc_type        TEXT,
     format          TEXT,
@@ -115,7 +117,7 @@ CREATE TABLE IF NOT EXISTS fulltext (
 
 RECORD_COLUMNS = [
     "id", "oai_identifier", "datestamp", "title", "alt_title", "authors", "corporate_authors",
-    "contributors", "year", "date_raw", "abstract", "table_of_contents", "publisher", "doc_type",
+    "contributors", "year", "year_source", "date_raw", "abstract", "table_of_contents", "notes", "publisher", "doc_type",
     "format", "language", "subjects", "collections", "doi", "report_numbers", "other_urls",
     "spatial", "source", "rights", "landing_url", "raw", "harvested_at",
 ]
@@ -138,6 +140,15 @@ class Store:
         self.conn = sqlite3.connect(str(self.path), timeout=60)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(records)")}
+        for col, decl in (("year_source", "TEXT"), ("notes", "TEXT")):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE records ADD COLUMN {col} {decl}")
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -290,6 +301,12 @@ class Store:
             "SELECT COALESCE(CAST(year AS TEXT), 'unknown') AS y, COUNT(*) AS n FROM records GROUP BY y ORDER BY y"
         ).fetchall()
         return {r["y"]: r["n"] for r in rows}
+
+    def year_source_distribution(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT COALESCE(year_source, 'none') AS s, COUNT(*) AS n FROM records GROUP BY s ORDER BY n DESC"
+        ).fetchall()
+        return {r["s"]: r["n"] for r in rows}
 
     def decade_distribution(self) -> dict[str, int]:
         out: dict[str, int] = {}

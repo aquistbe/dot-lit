@@ -54,6 +54,7 @@ def _hit(r: dict[str, Any]) -> dict[str, Any]:
         "authors": r.get("authors") or [],
         "corporate_authors": r.get("corporate_authors") or [],
         "year": r.get("year"),
+        "year_source": r.get("year_source"),
         "doc_type": r.get("doc_type"),
         "report_numbers": r.get("report_numbers") or [],
         "doi": r.get("doi") or None,

@@ -83,6 +83,7 @@ dot-lit harvest --mode full         # walk the whole repository again
 dot-lit harvest --mode incremental  # from = start of last complete run − 1 h, until = now
 dot-lit harvest --from 2026-08-01T00:00:00Z   # explicit window (full timestamp required)
 dot-lit harvest --max-pages 3       # testing only; the run is recorded as failed/partial
+dot-lit reindex                     # re-parse the cached raw pages (no network) after a parser change
 ```
 
 What the harvester does and why (all behaviour verified against ROSA-P on 2026-08-26):
@@ -128,6 +129,49 @@ is what `list_collections` / the `collection` filter use.
 PDF links are not in the metadata; `get_fulltext` reads `citation_pdf_url` from the landing
 page and falls back to the datastream convention `/view/dot/{n}/dot_{n}_DS1.pdf`.
 
+## Verification (2026-08-26, first full harvest)
+
+**Harvest completeness.** Run 1 (`full`) walked 908 pages / 90,706 records in 15 min
+(00:03:59–00:19:11 UTC) with 0 resumptions, 0 cursor mismatches, and ended on a page of 6
+records with no resumption token — the OAI-PMH definition of a complete list. 90,603
+unique records are in the store; the 103-record gap is the same record appearing on two
+pages, which happens because ROSA-P does not return records in a stable order (the
+harvester logs this: "datestamp ordering violated on page 2"). A second independent full
+pass was run into a separate directory to compare ID sets — see below.
+
+**Coverage by decade** (year present for 74,448 = 82 %; the remaining 16,155 have no date
+in any metadata field; `year_source` says whether a year came from `dc:date` (48,658), a
+bare-year description line (22,205) or the title (3,585)):
+
+| decade | records | decade | records |
+|-------:|--------:|-------:|--------:|
+| 1900s–1930s | 3,243 | 1980s | 5,408 |
+| 1940s | 2,618 | 1990s | 8,936 |
+| 1950s | 2,627 | 2000s | 11,466 |
+| 1960s | 2,947 | 2010s | 18,690 |
+| 1970s | 5,057 | 2020s | 13,456 |
+
+**Known-item retrieval** (`dot-lit search …`, rank 1 unless noted):
+
+| Target | Query | Result |
+|--------|-------|--------|
+| NHTSA *Countermeasures That Work* | `"countermeasures that work" guide highway safety offices` | dot:1789 (2005), dot:1827 (3rd ed. 2008), dot:40255 (1st ed. 2006), dot:1778 (2nd ed. 2007); 11th ed. 2023 is dot:72947 (DOT HS 813 490), 10th ed. dot:57466. The bare phrase alone ranks the one-page *Traffic Tech* summaries of CTW first (short documents win on BM25), then the guides. |
+| Oregon DMV Driver Improvement Program evaluation (Strathman et al., 2007) | `oregon driver improvement program strathman` | dot:21848 "Evaluation of the Oregon DMV driver improvement program", Strathman, Kimpel, Leistner; report no. SPR 634. Undated in ROSA-P metadata. |
+| Virginia driver improvement reports (Lynn, 1982) | `virginia driver improvement lynn` | dot:18959 (12-month report), dot:18905 (short-term effects), dot:18969 (24-month final report), all Cheryl Lynn, Virginia Highway & Transportation Research Council. Undated in ROSA-P metadata. |
+
+**Real query** `driver improvement program evaluation negligent operator` (top 6 of 10):
+
+1. dot:18905 — An evaluation of the short-term effects of the Virginia driver improvement program (Lynn) — *all_terms*
+2. dot:29326 — Review of NJ point system (Carnegie, Ozbay, Mudigonda, 2013; FHWA NJ-2013-004) — *all_terms*
+3. dot:18959 — …Virginia driver improvement program on negligent driving: 12-month report (Lynn)
+4. dot:18969 — …Virginia driver improvement program on negligent driving: 24-month report (Lynn)
+5. dot:17678 — Study of recidivism rates among drivers administratively sanctioned by the New Jersey MVC (Carnegie et al., 2009)
+6. dot:17677 — Study of the effects of plea bargaining motor vehicle offenses (Carnegie et al., 2009)
+
+Full-text extraction was checked on dot:93144 (DOT HS 813 827, 3.7 MB PDF, resolved via
+`citation_pdf_url`). Unit tests: `uv run pytest` (parser for both metadata profiles, year
+fallback, FTS search/filters, upsert idempotence, query tokenizer, id normalisation).
+
 ## Layout
 
 ```
@@ -139,7 +183,7 @@ src/dot_lit/
   harvest.py   full / incremental harvest with completeness + truncation handling
   fulltext.py  PDF resolution, download (size-capped), pypdf extraction, cache
   server.py    MCP tools (FastMCP / MCPServer)
-  cli.py       dot-lit probe | harvest | status | search | get | fulltext | install-claude-desktop
+  cli.py       dot-lit probe | harvest | reindex | status | search | get | fulltext | install-claude-desktop
 tests/         unit tests (parser, store, query tokenizer)
 ```
 
