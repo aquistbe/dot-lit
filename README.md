@@ -489,9 +489,15 @@ uses whichever backend produced it: `hybrid` (default), `keyword`, or `semantic`
 `mode_used` in every result says what ran, and it degrades to keyword when no vectors exist.
 `harvest_status()` reports backend, model, dimension and coverage.
 
-Backends measured on 2026-08-26 (Apple Silicon): fastembed MiniLM-L12 ≈ see `embed` log;
-Ollama `qwen3-embedding:8b` ≈ 3 records/s (whole corpus ≈ 30 h — use it for one source, or
-`qwen3-embedding:0.6b`). Qwen queries get the model's retrieval instruction prefix.
+Backends measured on 2026-08-26 on a 10-core Apple Silicon laptop, 256 real records
+(title + abstract): fastembed MiniLM-L12 ≈ 30 records/s on CPU (the CoreML provider is no
+faster); Ollama `qwen3-embedding:0.6b` ≈ 20/s (1024-d), `qwen3-embedding:8b` ≈ 1.4/s
+(4096-d, truncated to 1024). So the first full pass over 342k records is a one-time ~3 h
+with the default model; the weekly increment is seconds. Use `--source` to embed one source
+with a heavier model. Note the MiniLM model reads at most 128 tokens (title plus the first
+~90 words of the abstract); Qwen reads the full 1,500-character window and gets the model's
+retrieval instruction prefix on queries. Most users should install a snapshot (below) and
+never run the full pass at all.
 
 ### Snapshots: skip the harvest
 
