@@ -121,7 +121,17 @@ def get_fulltext(store: Store, record_id: str, *, refresh: bool = False) -> dict
         return cached
     config.ensure_dirs()
     with _http() as client:
-        resolved = resolve_pdf_url(rid, client)
+        if rid.startswith("dot:"):
+            resolved = resolve_pdf_url(rid, client)
+        else:
+            # Imported record (e.g. trid:): only a directly linked PDF URL is tried.
+            rec = store.get_record(rid) or {}
+            pdfs = [u for u in (rec.get("other_urls") or []) if u.lower().endswith(".pdf")]
+            resolved = {"pdf_url": pdfs[0] if pdfs else None, "content_length": 0}
+            if not pdfs:
+                store.put_fulltext(rid, pdf_url=None, status="no_pdf", n_pages=0, n_chars=0, text=None,
+                                   error="imported record without a direct PDF link; open landing_url instead")
+                return store.get_fulltext(rid) or {}
         url = resolved.get("pdf_url")
         if not url:
             store.put_fulltext(rid, pdf_url=None, status="no_pdf", n_pages=0, n_chars=0, text=None,

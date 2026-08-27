@@ -7,6 +7,13 @@ research reports, University Transportation Center reports, and state DOT evalua
 held by **ROSA-P**, the National Transportation Library's repository
 (<https://rosap.ntl.bts.gov>).
 
+> I created this for my own personal academic and research use and am happy to share it
+> with anyone else who finds it useful. I welcome feedback on errors, integration needs,
+> improvements and other commentaries. I will check those regularly and will integrate them
+> as much as possible and document that. If you are interested in helping to support this or
+> have other ideas for it, I welcome them! — Alex Quistberg
+> ([open an issue](https://github.com/aquistbe/dot-lit/issues))
+
 It does this the only way that works for an OAI-PMH source: it **harvests the whole
 repository's metadata into a local SQLite database**, builds an **FTS5 full-text index**
 over it, and serves search from that index. Nothing is queried live except an optional PDF
@@ -22,7 +29,8 @@ fetch for full text. Re-harvests are incremental (`from=` on the OAI request) an
 | `list_collections()` | Collections (`dc:relation.isPartOf`) and document types with counts |
 | `harvest_status()` | Record count, last harvest run and its status/notes, coverage by year and decade |
 
-`id` accepts `dot:93144`, `93144`, `oai:dot.stacks:dot:93144`, or the landing URL.
+`id` accepts `dot:93144`, `93144`, `oai:dot.stacks:dot:93144`, or the landing URL. Imported
+records use other prefixes (`trid:813520`, `import:…`).
 
 Query syntax: bare words are ANDed first; if fewer than `limit` hits match every term the
 remaining slots are filled with any-term matches (`match_mode` = `all_terms` /
@@ -75,6 +83,20 @@ Restart Claude Desktop afterwards. For Claude Code: `claude mcp add dot-lit -- d
 
 No credentials are used or stored anywhere; every request goes to public endpoints.
 
+### Pinned versions
+
+Releases are git tags `vMAJOR.MINOR.PATCH` (semantic versioning: patch = fixes, minor = new
+tools/sources, major = a breaking change to the tool surface or database schema). Each tag
+triggers the `release` workflow, which runs the tests, builds a wheel + sdist and attaches
+them to a GitHub Release. Python dependencies are pinned by the committed `uv.lock`; CI
+installs with `uv sync --frozen`, so a release always runs against the exact versions it was
+tested with. To install a specific version:
+
+```bash
+uv tool install git+https://github.com/aquistbe/dot-lit@v0.1.0
+uv tool upgrade dot-lit          # later, to move to whatever main points at
+```
+
 ## Harvesting
 
 ```bash
@@ -113,6 +135,42 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   extracted text are cached under `pdf/` and in the `fulltext` table.
 * `from`/`until` must be full `YYYY-MM-DDThh:mm:ssZ` timestamps (a bare date is a
   `badArgument`).
+
+### Monthly rebuild and weekly updates (maintenance schedule)
+
+The corpus changes slowly, so the cadence is: **weekly incremental** harvest and a **monthly
+fresh rebuild**. `harvest --fresh` full-harvests into a temporary store and then atomically
+replaces the `dot:` records in the live index — the only way records ROSA-P stops serving
+ever disappear (its OAI-PMH endpoint does not track deletions). Imported sources (TRID
+exports) are untouched, and a failed rebuild changes nothing.
+
+```bash
+dot-lit install-schedule          # shows the two launchd agents
+dot-lit install-schedule --write  # installs them: Mon 06:00 incremental, 1st of month 05:00 --fresh
+```
+
+Logs land in `$DOT_LIT_DATA_DIR/logs/`. On Linux use the cron lines the command prints.
+
+Monthly maintenance checklist (done with the rebuild): read new GitHub issues; `uv lock
+--upgrade && uv run pytest`; note fixes in the changelog section of the release; bump
+`version` in `pyproject.toml` and `src/dot_lit/__init__.py`; `git tag vX.Y.Z && git push
+--tags`.
+
+### TRID: import what you export
+
+TRID (<https://trid.trb.org>) is the most complete transportation bibliography and the
+natural complement to ROSA-P, but it has no API, its FAQ says TRB "does not grant access to
+TRID backend systems or lift export/download restrictions", and its `robots.txt` disallows
+AI crawlers. What every user *may* do is search and export. So:
+
+1. Run your search in TRID, choose **Export → RIS** (CSV and XML are also offered).
+2. `dot-lit import ~/Downloads/trid-driver-improvement.ris --collection "TRID: driver improvement"`
+
+Records get ids `trid:<accession>` from the TRID view URL, land in the `TRID` collection
+(`search_reports(..., collection="TRID")`), and re-importing the same file is idempotent.
+The importer is generic RIS, so Zotero/EndNote/Scopus exports work the same way with
+`--source <prefix>`. `get_fulltext` on an imported record only follows a direct `.pdf`
+link; otherwise use `landing_url`.
 
 ### What ROSA-P's OAI-PMH endpoint offers
 
@@ -186,7 +244,10 @@ src/dot_lit/
   harvest.py   full / incremental harvest with completeness + truncation handling
   fulltext.py  PDF resolution, download (size-capped), pypdf extraction, cache
   server.py    MCP tools (FastMCP / MCPServer)
-  cli.py       dot-lit probe | harvest | reindex | status | search | get | fulltext | install-claude-desktop
+  importers.py RIS import (TRID exports and any other reference-manager export)
+  cli.py       dot-lit probe | harvest [--fresh] | import | reindex | status | search | get | fulltext
+               | install-claude-desktop | install-schedule
+.github/workflows/  ci.yml (tests on push/PR), release.yml (wheel + GitHub Release on tag)
 tests/         unit tests (parser, store, query tokenizer)
 ```
 
@@ -265,6 +326,32 @@ TRID (<https://trid.trb.org>) has no public API, no OAI-PMH endpoint and no bulk
 Its FAQ states that "TRB does not grant access to TRID backend systems or lift
 export/download restrictions for individuals or organizations" and that the database may
 not be used to train LLMs. It is deliberately not scraped here.
+
+### v2 order (agreed 2026-08-26)
+
+1. VTI + BASt (OAI-PMH drop-ins) — 2. World Bank OKR, IPEA, CEPAL (OAI, subject-filtered) —
+3. IRDB Japan — 4. OpenAlex `type:report` as global backstop — 5. a **PubMed transport
+subset** (see below).
+
+### PubMed: a transport/injury subset, not all of PubMed
+
+PubMed's E-utilities (`esearch`/`efetch`, free, 3 req/s without a key) can maintain a
+local subset from a fixed strategy, refreshed with `mindate`/`maxdate` on the same
+weekly/monthly cadence. Two complementary filters, OR-ed together:
+
+* **MeSH strategy** — `"Accidents, Traffic"[MeSH] OR "Pedestrians"[MeSH] OR "Bicycling"[MeSH]
+  OR "Automobile Driving"[MeSH] OR "Motorcycles"[MeSH] OR "Wounds and Injuries"[MeSH] AND
+  ("Transportation"[MeSH] OR "Built Environment"[MeSH] OR "City Planning"[MeSH])` — catches
+  transport papers in general and clinical journals.
+* **Journal list** — Accident Analysis & Prevention, Traffic Injury Prevention, Journal of
+  Safety Research, Injury Prevention, Injury Epidemiology, Journal of Transport & Health,
+  Safety Science, Transportation Research Part F, Transport Reviews, BMC Public Health
+  (transport-tagged only), etc. — catches transport papers indexed without the MeSH terms.
+
+SafetyLit (safetylit.org, the WHO-affiliated weekly injury-literature bulletin) maintains
+exactly such a journal list and hand-classifies articles by topic, which would make it the
+best seed for the journal filter; its site was unreachable (connection refused on every
+host name) when checked on 2026-08-26, so its current status is unconfirmed.
 
 ## Embeddings (not in v1)
 

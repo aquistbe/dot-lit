@@ -225,6 +225,43 @@ def harvest(
             client.close()
 
 
+def harvest_fresh(store: Store, *, progress: Callable[[str], None] | None = None) -> HarvestResult:
+    """True rebuild: full-harvest ROSA-P into a temporary store, then atomically swap the
+    `dot:` records into the live store.  Records that ROSA-P no longer serves disappear;
+    imported sources (e.g. trid:) are untouched; a failed harvest changes nothing."""
+    say = progress or (lambda m: log.info(m))
+    tmp_path = store.path.with_name(store.path.stem + ".rebuild.sqlite")
+    for suffix in ("", "-wal", "-shm"):
+        p = tmp_path.with_name(tmp_path.name + suffix)
+        if p.exists():
+            p.unlink()
+    tmp = Store(tmp_path)
+    try:
+        res = harvest(tmp, mode="full", progress=say)
+        if res.status != "complete":
+            say("fresh rebuild aborted: harvest did not complete; live index unchanged")
+            return res
+        tmp.close()
+        tmp = None
+        other = Store(tmp_path)
+        try:
+            n = store.replace_source("dot", other)
+        finally:
+            other.close()
+        store.set_meta("last_harvest_finished_at", res.finished_at)
+        store.set_meta("last_full_harvest_finished_at", res.finished_at)
+        say(f"fresh rebuild swapped in {n} dot: records; store now {store.count()} records")
+        res.total_in_store = store.count()
+        return res
+    finally:
+        if tmp is not None:
+            tmp.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = tmp_path.with_name(tmp_path.name + suffix)
+            if p.exists():
+                p.unlink()
+
+
 def reindex(store: Store, *, progress: Callable[[str], None] | None = None) -> dict:
     """Re-parse the cached raw OAI pages (last complete full harvest and every complete run
     after it) and upsert them.  Lets the parser evolve without re-harvesting."""
@@ -264,6 +301,7 @@ def status(store: Store) -> dict:
         "oai_base_url": config.ROSAP_OAI_BASE,
         "data_dir": str(config.DATA_DIR),
         "total_records": total,
+        "by_source": store.source_distribution(),
         "records_with_year": sum(known.values()),
         "records_without_year": years.get("unknown", 0),
         "year_source": store.year_source_distribution(),

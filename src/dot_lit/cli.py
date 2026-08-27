@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, config
-from .harvest import harvest, make_client, reindex, status
+from .harvest import harvest, harvest_fresh, make_client, reindex, status
 from .store import Store
 
 
@@ -36,12 +36,31 @@ def cmd_probe(_: argparse.Namespace) -> int:
 def cmd_harvest(a: argparse.Namespace) -> int:
     s = _store()
     try:
-        res = harvest(s, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
-                      max_pages=a.max_pages, progress=lambda m: print(m, file=sys.stderr, flush=True))
+        say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+        if a.fresh:
+            res = harvest_fresh(s, progress=say)
+        else:
+            res = harvest(s, mode=a.mode, from_ts=a.__dict__.get("from"), until_ts=a.until,
+                          max_pages=a.max_pages, progress=say)
     finally:
         s.close()
     print(json.dumps(res.__dict__, indent=2))
     return 0 if res.status == "complete" else 1
+
+
+def cmd_import(a: argparse.Namespace) -> int:
+    from .importers import import_ris
+
+    s = _store()
+    out = []
+    try:
+        for f in a.files:
+            out.append(import_ris(s, Path(f), source=a.source, collection=a.collection))
+            print(f"{f}: {out[-1]['records']} records ({out[-1]['by_source']})", file=sys.stderr)
+    finally:
+        s.close()
+    print(json.dumps(out, indent=2))
+    return 0
 
 
 def cmd_reindex(_: argparse.Namespace) -> int:
@@ -152,6 +171,66 @@ def cmd_install(a: argparse.Namespace) -> int:
     return 0
 
 
+PLIST = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{label}</string>
+  <key>ProgramArguments</key><array>{args}</array>
+  <key>EnvironmentVariables</key><dict>{env}</dict>
+  <key>StartCalendarInterval</key><dict>{cal}</dict>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+  <key>RunAtLoad</key><false/>
+</dict></plist>
+"""
+
+
+def cmd_install_schedule(a: argparse.Namespace) -> int:
+    """macOS launchd: weekly incremental harvest (Mon 06:00) + monthly fresh rebuild (1st, 05:00)."""
+    if sys.platform != "darwin":
+        print("install-schedule writes launchd agents (macOS). On Linux use cron, e.g.:\n"
+              "  0 6 * * 1   dot-lit harvest --mode incremental >> ~/.local/share/dot-lit/logs/weekly.log 2>&1\n"
+              "  0 5 1 * *   dot-lit harvest --fresh            >> ~/.local/share/dot-lit/logs/monthly.log 2>&1",
+              file=sys.stderr)
+        return 1
+    exe = shutil.which("dot-lit") or str(Path(sys.argv[0]).resolve())
+    logs = config.DATA_DIR / "logs"
+    env = {"DOT_LIT_DATA_DIR": str(config.DATA_DIR), "PATH": "/usr/local/bin:/usr/bin:/bin:" + str(Path(exe).parent)}
+    if config.CONTACT_EMAIL:
+        env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
+    jobs = {
+        "org.dot-lit.harvest-weekly": (["harvest", "--mode", "incremental"], {"Weekday": 1, "Hour": 6, "Minute": 0}),
+        "org.dot-lit.harvest-monthly": (["harvest", "--fresh"], {"Day": 1, "Hour": 5, "Minute": 0}),
+    }
+    agents = Path("~/Library/LaunchAgents").expanduser()
+    written = []
+    for label, (args, cal) in jobs.items():
+        xml = PLIST.format(
+            label=label,
+            args="".join(f"<string>{x}</string>" for x in [exe, *args]),
+            env="".join(f"<key>{k}</key><string>{v}</string>" for k, v in env.items()),
+            cal="".join(f"<key>{k}</key><integer>{v}</integer>" for k, v in cal.items()),
+            log=str(logs / f"{label.split('.')[-1]}.log"),
+        )
+        target = agents / f"{label}.plist"
+        if not a.write:
+            print(f"# would write {target}\n{xml}")
+            continue
+        logs.mkdir(parents=True, exist_ok=True)
+        agents.mkdir(parents=True, exist_ok=True)
+        target.write_text(xml)
+        import os
+        import subprocess
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(target)], capture_output=True)
+        r = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)], capture_output=True, text=True)
+        written.append((target, r.returncode, r.stderr.strip()))
+    for target, rc, err in written:
+        print(f"loaded {target}" + (f" (launchctl rc={rc}: {err})" if rc else ""))
+    if not a.write:
+        print("\n# Re-run with --write to install and load these agents. Logs go to", logs)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="dot-lit", description="U.S. DOT grey-literature index (ROSA-P)")
     p.add_argument("--version", action="version", version=__version__)
@@ -165,8 +244,15 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--from", dest="from", help="OAI from= (YYYY-MM-DDThh:mm:ssZ); overrides mode")
     h.add_argument("--until", help="OAI until= (YYYY-MM-DDThh:mm:ssZ)")
     h.add_argument("--max-pages", type=int, help="stop early (marks run failed/partial); for testing")
+    h.add_argument("--fresh", action="store_true",
+                   help="true rebuild: full harvest into a temp store, then atomically replace all ROSA-P records")
     h.set_defaults(fn=cmd_harvest)
 
+    im = sub.add_parser("import", help="import RIS export(s) (e.g. from TRID's Export button) into the index")
+    im.add_argument("files", nargs="+")
+    im.add_argument("--source", default="import", help="id prefix for records without a TRID URL (default: import)")
+    im.add_argument("--collection", help="collection label for the imported records (default: file name)")
+    im.set_defaults(fn=cmd_import)
     sub.add_parser("reindex", help="re-parse cached raw OAI pages into the index (no network)").set_defaults(fn=cmd_reindex)
     sub.add_parser("status", help="record counts, last harvest, coverage by year").set_defaults(fn=cmd_status)
 
@@ -188,6 +274,10 @@ def main(argv: list[str] | None = None) -> int:
     f.add_argument("--refresh", action="store_true")
     f.add_argument("--max-chars", type=int, default=5000)
     f.set_defaults(fn=cmd_fulltext)
+
+    sch = sub.add_parser("install-schedule", help="print (or --write) launchd agents: weekly incremental + monthly fresh rebuild")
+    sch.add_argument("--write", action="store_true")
+    sch.set_defaults(fn=cmd_install_schedule)
 
     i = sub.add_parser("install-claude-desktop", help="print (or --write) the Claude Desktop MCP config entry")
     i.add_argument("--write", action="store_true")

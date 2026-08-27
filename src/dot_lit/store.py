@@ -302,6 +302,32 @@ class Store:
         ).fetchall()
         return {r["y"]: r["n"] for r in rows}
 
+    def source_distribution(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT substr(id, 1, instr(id, ':') - 1) AS src, COUNT(*) AS n FROM records GROUP BY src ORDER BY n DESC"
+        ).fetchall()
+        return {r["src"]: r["n"] for r in rows}
+
+    def replace_source(self, prefix: str, other: "Store") -> int:
+        """Atomically replace every record with id prefix `prefix:` by the rows in `other`
+        (a freshly harvested store).  Used by `harvest --fresh` for a true rebuild that
+        drops records no longer served, without ever leaving the index empty."""
+        like = f"{prefix}:%"
+        self.conn.execute("ATTACH DATABASE ? AS fresh", (str(other.path),))
+        try:
+            with self.conn:
+                self.conn.execute("DELETE FROM record_collections WHERE record_id LIKE ?", (like,))
+                self.conn.execute("DELETE FROM records WHERE id LIKE ?", (like,))
+                cols = ", ".join(RECORD_COLUMNS)
+                self.conn.execute(f"INSERT INTO records({cols}) SELECT {cols} FROM fresh.records WHERE id LIKE ?", (like,))
+                self.conn.execute("INSERT INTO record_collections SELECT * FROM fresh.record_collections WHERE record_id LIKE ?", (like,))
+                self.conn.execute("INSERT OR IGNORE INTO harvest_runs(source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes) "
+                                  "SELECT source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes FROM fresh.harvest_runs WHERE status='complete'")
+                n = self.conn.execute("SELECT COUNT(*) FROM records WHERE id LIKE ?", (like,)).fetchone()[0]
+        finally:
+            self.conn.execute("DETACH DATABASE fresh")
+        return n
+
     def year_source_distribution(self) -> dict[str, int]:
         rows = self.conn.execute(
             "SELECT COALESCE(year_source, 'none') AS s, COUNT(*) AS n FROM records GROUP BY s ORDER BY n DESC"
