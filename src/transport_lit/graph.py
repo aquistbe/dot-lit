@@ -64,15 +64,17 @@ def _norm_title(t: str) -> str:
 
 def _titles_match(a: str, b: str) -> bool:
     """Exact normalised match, or one title a prefix of the other (edition/subtitle tails),
-    or Jaccard token similarity >= 0.85 for titles of at least four words."""
+    or Jaccard token similarity >= 0.8 for titles of at least four words."""
     if not a or not b:
         return False
-    if a == b or a.startswith(b) or b.startswith(a):
+    if a == b:
         return True
     ta, tb = set(a.split()), set(b.split())
     if min(len(ta), len(tb)) < 4:
         return False
-    return len(ta & tb) / len(ta | tb) >= 0.85
+    if a.startswith(b) or b.startswith(a):
+        return True
+    return len(ta & tb) / len(ta | tb) >= 0.8
 
 
 def _wid(url_or_id: str) -> str:
@@ -141,14 +143,14 @@ class Graph:
                 return r[0], "pmid"
         return None, None
 
-    def resolve(self, record_id: str) -> dict[str, Any] | None:
+    def resolve(self, record_id: str, *, refresh: bool = False) -> dict[str, Any] | None:
         """OpenAlex work for a local record (cached).  Returns the works row or None."""
         rid = normalize_id(record_id)
         c = self.s.conn
         row = c.execute("SELECT * FROM works WHERE record_id = ?", (rid,)).fetchone()
         if row:
             return dict(row)
-        if c.execute("SELECT 1 FROM unresolved WHERE record_id = ? AND tried_at > ?",
+        if not refresh and c.execute("SELECT 1 FROM unresolved WHERE record_id = ? AND tried_at > ?",
                      (rid, _ts(datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)))).fetchone():
             return None
         rec = self.s.get_record(rid)
@@ -184,7 +186,7 @@ class Graph:
 
     # -- edges ------------------------------------------------------------------------------
     def references(self, record_id: str, *, refresh: bool = False) -> dict[str, Any]:
-        w = self.resolve(record_id)
+        w = self.resolve(record_id, refresh=refresh)
         if not w:
             return {"id": normalize_id(record_id), "resolved": False, "references": []}
         c = self.s.conn
@@ -202,7 +204,7 @@ class Graph:
                 "n": len(rows), "in_index": sum(1 for r in rows if r["record_id"]), "references": [dict(r) for r in rows]}
 
     def citations(self, record_id: str, *, refresh: bool = False, only_in_index: bool = False) -> dict[str, Any]:
-        w = self.resolve(record_id)
+        w = self.resolve(record_id, refresh=refresh)
         if not w:
             return {"id": normalize_id(record_id), "resolved": False, "citations": []}
         c = self.s.conn

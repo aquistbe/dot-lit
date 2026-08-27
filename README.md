@@ -506,7 +506,7 @@ review of post-licence driver education (`pubmed:12917984`, in the index); a 202
 elderly-pedestrian paper has 57 references, 19 in the index. OpenAlex resolves NTL's
 `10.21949/…` DOIs (15,493 ROSA-P records carry one); records without any DOI — 73,000 of
 ROSA-P's 90,599 — depend on the title match, which accepts an exact normalised title, a
-prefix relation (edition or subtitle tails), or ≥ 0.85 token overlap, always with the year
+prefix relation (edition or subtitle tails), or ≥ 0.8 token overlap, always with the year
 within ±1. Grey literature that nobody has cited in indexed venues will still show zero;
 that is a property of the citation data, not of the index. OpenCitations and Semantic
 Scholar could be added as fallbacks in the same tables.
