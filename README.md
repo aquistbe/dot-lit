@@ -16,7 +16,7 @@ continents plus whatever you export from TRID:
 | `ipea` | IPEA (Brazil) | 207 | filtered subset of 14,400; pt; precision ~16/20 |
 | `cepal` | CEPAL/ECLAC (Latin America) | 1,165 | filtered subset of 52,199; es/en; precision ~15/20 |
 | `openalex` | OpenAlex — works typed *report* in 10 transport topics (global) | 11,448 | topics: Traffic and Road Safety, Urban Transport and Accessibility, Transportation Planning, … |
-| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | 118,609 | 20 ja/en queries, 10k cap each; 59k with abstracts; CJK queries use substring matching |
+| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | 118,609 | needs a free NII application ID (`DOT_LIT_CINII_APPID`); 20 ja/en queries, 10k cap each; CJK queries use substring matching |
 | `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | 105,028 | date-sliced E-utilities harvest; `DOT_LIT_PUBMED_TERM` overrides the strategy |
 | `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
 
@@ -126,15 +126,22 @@ Restart Claude Desktop afterwards. For Claude Code: `claude mcp add dot-lit -- d
 | `DOT_LIT_HTTP_TIMEOUT` | `90` | Per-request timeout (s) |
 | `DOT_LIT_MAX_PDF_BYTES` | 80 MB | Refuse larger PDFs in `get_fulltext` |
 | `DOT_LIT_MAX_PDF_PAGES` | 600 | Stop extraction after this many pages |
+| `DOT_LIT_CINII_APPID` | *(unset)* | NII application ID; required to harvest CiNii (register at support.nii.ac.jp/en/cinii/api/developer) |
+| `NCBI_API_KEY` | *(unset)* | Optional; raises PubMed E-utilities rate from 3 to 10 req/s |
+| `DOT_LIT_PUBMED_TERM` | built-in strategy | Replace the PubMed search strategy |
+| `DOT_LIT_EMBED_BACKEND` / `DOT_LIT_EMBED_MODEL` / `DOT_LIT_EMBED_DIM` | fastembed / MiniLM-L12 / 1024 | Semantic search backend, model, Ollama truncation |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for the `ollama` backend |
 
 No credentials are used or stored anywhere; every request goes to public endpoints.
 
-### Install without cloning (after the first PyPI release)
+### Install without cloning (PyPI)
 
-`uvx --from dot-lit dot-lit-mcp` will run the server straight from PyPI once the
-`publish.yml` workflow is armed: on pypi.org create the `dot-lit` project and add a *trusted
-publisher* (owner `aquistbe`, repo `dot-lit`, workflow `publish.yml`, environment `pypi`);
-every GitHub Release then publishes automatically. `server.json` is the manifest for the
+Once published, `uv tool install dot-lit` / `uvx --from dot-lit dot-lit-mcp` run it straight
+from PyPI (the wheel is verified with `twine check` and a clean-venv install in CI). To arm
+publishing, the maintainer does this once on pypi.org: **Account → Publishing → Add a new
+pending publisher** with project `dot-lit`, owner `aquistbe`, repository `dot-lit`, workflow
+`publish.yml`, environment `pypi`. The next GitHub Release (or a manual run of the
+*publish-pypi* workflow) then uploads automatically; no API token is stored anywhere. `server.json` is the manifest for the
 MCP Registry (`registry.modelcontextprotocol.io`), to submit after the PyPI package exists.
 
 ### Pinned versions
@@ -460,9 +467,37 @@ with one id scheme, so a model can search everything at once and export citation
 those servers have that this one still lacks: citation graphs (who cites whom), author
 disambiguation, and semantic (embedding) search — see below.
 
-## Embeddings (not in v1)
+## Semantic search (v0.4)
 
-Search is lexical (FTS5/BM25). The schema leaves room for a `record_embeddings` table keyed
-by `records.id`; a hybrid ranker could fuse BM25 with cosine scores. Keep it optional so the
-package installs without a model download; an Ollama embedding model (e.g. `qwen3-embedding`)
-would keep it fully local.
+Keyword search is FTS5/BM25. Adding vectors turns `search_reports` into a **hybrid** search
+(BM25 and cosine fused by reciprocal rank) that finds records by meaning and across
+languages — an English query reaching Swedish, German, Spanish, Portuguese or Japanese
+records. Everything runs locally; no account, no GPU.
+
+```bash
+uv tool install "dot-lit[semantic]"   # adds fastembed (ONNX runtime), ~60 MB
+dot-lit embed                         # default backend: fastembed, multilingual MiniLM-L12 (384-d, 220 MB model, one-time download)
+dot-lit embed --backend ollama --model qwen3-embedding:8b     # opt-in: any Ollama embedding model, truncated to 1024-d
+dot-lit search "programa de mejoramiento de conductores" --mode semantic
+```
+
+`embed` only processes records that have no vector yet, so after the first pass the weekly
+harvest adds seconds. Vectors live in `$DOT_LIT_DATA_DIR/vectors/<backend-model>/` as a
+memory-mapped float16 matrix (342k × 384 ≈ 260 MB); search is a chunked dot product, no
+extension. The active vector set is recorded in the index, so `search_reports(mode=…)`
+uses whichever backend produced it: `hybrid` (default), `keyword`, or `semantic`;
+`mode_used` in every result says what ran, and it degrades to keyword when no vectors exist.
+`harvest_status()` reports backend, model, dimension and coverage.
+
+Backends measured on 2026-08-26 (Apple Silicon): fastembed MiniLM-L12 ≈ see `embed` log;
+Ollama `qwen3-embedding:8b` ≈ 3 records/s (whole corpus ≈ 30 h — use it for one source, or
+`qwen3-embedding:0.6b`). Qwen queries get the model's retrieval instruction prefix.
+
+### Snapshots: skip the harvest
+
+`dot-lit snapshot build dot-lit-YYYY-MM.tar.gz` packs the SQLite index plus the active
+vectors; `dot-lit snapshot install <url-or-file>` unpacks one into a fresh
+`DOT_LIT_DATA_DIR`, after which weekly incremental harvests keep it current. Snapshots
+leave out **CiNii** (its API terms require registration and are silent on redistribution)
+and **TRID** imports (TRB's terms); users harvest those themselves. Releases carry a
+snapshot when one was built.

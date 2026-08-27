@@ -106,10 +106,13 @@ def cmd_status(_: argparse.Namespace) -> int:
 
 
 def cmd_search(a: argparse.Namespace) -> int:
+    from .embeddings import hybrid_search
+
     s = _store()
     try:
-        hits = s.search(" ".join(a.query), year_min=a.year_min, year_max=a.year_max,
-                        collection=a.collection, limit=a.limit)
+        hits, used = hybrid_search(s, " ".join(a.query), mode=a.mode, limit=a.limit, year_min=a.year_min,
+                                   year_max=a.year_max, collection=a.collection)
+        print(f"(mode: {used})", file=sys.stderr)
     finally:
         s.close()
     if a.json:
@@ -122,7 +125,8 @@ def cmd_search(a: argparse.Namespace) -> int:
         print(f"    {authors}")
         if rn:
             print(f"    report no.: {rn}")
-        print(f"    {h.get('landing_url')}  mode={h.get('match_mode')} score={h.get('score'):.2f}")
+        extra = "".join(f" {k}={h[k]}" for k in ("keyword_rank", "semantic_rank", "semantic_score") if h.get(k) is not None)
+        print(f"    {h.get('landing_url')}  mode={h.get('match_mode')}{extra}")
         snip = (h.get("snippet") or "").replace("\n", " ")
         if snip:
             print(f"    {snip[:300]}")
@@ -153,6 +157,38 @@ def cmd_fulltext(a: argparse.Namespace) -> int:
     print(json.dumps(meta, indent=2), file=sys.stderr)
     print((ft.get("text") or "")[: a.max_chars])
     return 0 if ft.get("status") == "ok" else 1
+
+
+def cmd_embed(a: argparse.Namespace) -> int:
+    from .embeddings import embed_records, make_backend
+
+    backend = make_backend(a.backend, a.model, **({"dim": a.dim} if a.dim and a.backend == "ollama" else {}))
+    s = _store()
+    try:
+        res = embed_records(s, backend, rebuild=a.rebuild, limit=a.limit, batch=a.batch,
+                            sources=a.source.split(",") if a.source else None,
+                            progress=lambda m: print(m, file=sys.stderr, flush=True))
+    finally:
+        s.close()
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_snapshot(a: argparse.Namespace) -> int:
+    from . import snapshot
+
+    say = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+    if a.action == "build":
+        s = _store()
+        try:
+            res = snapshot.build(s, Path(a.path), include_vectors=not a.no_vectors,
+                                 exclude_sources=([x for x in a.exclude.split(",") if x] if a.exclude is not None else None), progress=say)
+        finally:
+            s.close()
+    else:
+        res = snapshot.install(a.path, force=a.force, progress=say)
+    print(json.dumps(res, indent=2))
+    return 0
 
 
 def cmd_digest(a: argparse.Namespace) -> int:
@@ -349,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--year-max", type=int)
     q.add_argument("--collection")
     q.add_argument("--limit", type=int, default=10)
+    q.add_argument("--mode", choices=["hybrid", "keyword", "semantic"], default="hybrid")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_search)
 
@@ -365,6 +402,24 @@ def main(argv: list[str] | None = None) -> int:
     sch = sub.add_parser("install-schedule", help="print (or --write) launchd agents: weekly incremental + monthly fresh rebuild")
     sch.add_argument("--write", action="store_true")
     sch.set_defaults(fn=cmd_install_schedule)
+
+    em = sub.add_parser("embed", help="compute embeddings for records that lack them (semantic search)")
+    em.add_argument("--backend", choices=["fastembed", "ollama"], default=None, help="default: $DOT_LIT_EMBED_BACKEND or fastembed")
+    em.add_argument("--model", help="fastembed model name or Ollama model tag (e.g. qwen3-embedding:8b)")
+    em.add_argument("--dim", type=int, help="ollama only: truncate vectors to this many dims (default 1024)")
+    em.add_argument("--rebuild", action="store_true")
+    em.add_argument("--limit", type=int)
+    em.add_argument("--source", help="comma-separated source keys to embed")
+    em.add_argument("--batch", type=int, default=64)
+    em.set_defaults(fn=cmd_embed)
+
+    sn = sub.add_parser("snapshot", help="build or install an index snapshot (SQLite + vectors)")
+    sn.add_argument("action", choices=["build", "install"])
+    sn.add_argument("path", help="output .tar.gz (build) or local path / https URL (install)")
+    sn.add_argument("--no-vectors", action="store_true")
+    sn.add_argument("--exclude", help="build: comma-separated sources to leave out (default: cinii,trid; pass '' for none)")
+    sn.add_argument("--force", action="store_true", help="install: replace an existing index")
+    sn.set_defaults(fn=cmd_snapshot)
 
     dg = sub.add_parser("digest", help="markdown digest of records added in the last N days")
     dg.add_argument("--days", type=int, default=7)

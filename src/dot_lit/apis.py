@@ -160,14 +160,21 @@ CINII_QUERIES = [
 CINII_MAX_PER_QUERY = int(os.environ.get("DOT_LIT_CINII_MAX", "10000"))
 
 
+CINII_REGISTER_URL = "https://support.nii.ac.jp/en/cinii/api/developer"
+
+
 def cinii_pages(client: Client, since: str | None, say: Callable[[str], None]) -> Iterator[tuple[str, bytes]]:
+    appid = os.environ.get("DOT_LIT_CINII_APPID", "").strip()
+    if not appid:
+        raise RuntimeError("CiNii's API terms require an application ID: register (free) at "
+                           f"{CINII_REGISTER_URL} and set DOT_LIT_CINII_APPID")
     limiter = RateLimiter(1.0)
     page = 0
     for q in CINII_QUERIES:
         start = 1
         total = None
         while True:
-            params = {"q": q, "format": "json", "count": 200, "start": start}
+            params = {"q": q, "format": "json", "count": 200, "start": start, "appid": appid}
             if since:
                 params["from"] = since[:4]
             raw = _get(client, limiter, "https://cir.nii.ac.jp/opensearch/all", params)
@@ -326,7 +333,8 @@ API_SOURCES: dict[str, ApiSource] = {
                           openalex_pages, openalex_parse, country="INT",
                           notes=f"type={OPENALEX_TYPES}; topics: " + ", ".join(list(OPENALEX_TOPICS.values())[:3]) + ", …"),
     "cinii": ApiSource("cinii", "CiNii Research — Japanese articles, theses, IRDB repository items", "CiNii Research (Japan)",
-                       cinii_pages, cinii_parse, country="JP", notes=f"{len(CINII_QUERIES)} ja/en queries, {CINII_MAX_PER_QUERY} max each"),
+                       cinii_pages, cinii_parse, country="JP",
+                       notes=f"{len(CINII_QUERIES)} ja/en queries, {CINII_MAX_PER_QUERY} max each; needs DOT_LIT_CINII_APPID (register at {CINII_REGISTER_URL})"),
     "pubmed": ApiSource("pubmed", "PubMed — transport/injury subset (MeSH strategy + journal list)", "PubMed transport subset",
                         pubmed_pages, pubmed_parse, country="INT", notes="E-utilities; NCBI_API_KEY optional; DOT_LIT_PUBMED_TERM overrides",
                         raw_ext="xml"),

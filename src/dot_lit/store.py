@@ -324,6 +324,19 @@ class Store:
             params.append(f"%{doc_type}%")
         return " ".join(clauses), params
 
+    def filter_ids(self, ids: list[str], *, year_min=None, year_max=None, collection=None, doc_type=None,
+                   sources=None) -> set[str]:
+        """Subset of ids that pass the same filters search() applies (and still exist)."""
+        if not ids:
+            return set()
+        filters, params = self._filters(year_min, year_max, collection, doc_type, sources)
+        out: set[str] = set()
+        for i in range(0, len(ids), 500):
+            chunk = ids[i: i + 500]
+            q = f"SELECT r.id FROM records r WHERE r.id IN ({','.join('?' for _ in chunk)}) {filters}"
+            out.update(r[0] for r in self.conn.execute(q, [*chunk, *params]))
+        return out
+
     def lookup(self, identifier: str) -> list[dict[str, Any]]:
         """Find records by DOI, PMID, report number, TRID/ROSA-P id or landing URL."""
         ident = identifier.strip()

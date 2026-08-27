@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # mcp 1.x
 
 from . import config
 from .citations import to_bibtex, to_ris
+from .embeddings import active_index, hybrid_search
 from .fulltext import get_fulltext as _get_fulltext
 from .harvest import status as _status
 from .store import Store, normalize_id
@@ -84,6 +85,7 @@ def search_reports(
     source: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    mode: str = "hybrid",
 ) -> dict[str, Any]:
     """Search titles, abstracts, subjects, authors and report numbers across all sources.
 
@@ -97,20 +99,28 @@ def search_reports(
         source: Comma-separated id prefixes to restrict to, e.g. "dot,vti" (dot = ROSA-P,
             vti, bast, wbokr, ipea, cepal, openalex, cinii, pubmed, trid).
         limit: Max hits (1-100). offset: for paging.
-    Returns ranked hits; ``match_mode`` says whether all query terms matched (all_terms) or
-    the hit came from the any-term fallback.
+        mode: "hybrid" (default: keyword BM25 fused with semantic vectors when an embedding
+            index exists), "keyword", or "semantic" (meaning-based, cross-language; needs
+            `dot-lit embed` to have run). ``mode_used`` in the result says what actually ran.
+    Returns ranked hits; ``match_mode`` says whether all query terms matched (all_terms),
+    the hit came from the any-term fallback, or from the semantic index.
     """
     limit = max(1, min(int(limit or 20), 100))
     srcs = [x.strip() for x in source.split(",") if x.strip()] if source else None
-    hits = store().search(query, year_min=year_min, year_max=year_max, collection=collection,
-                          doc_type=doc_type, limit=limit, offset=max(0, int(offset or 0)), sources=srcs)
+    mode = (mode or "hybrid").lower()
+    if mode not in ("hybrid", "keyword", "semantic"):
+        mode = "hybrid"
+    hits, used = hybrid_search(store(), query, mode=mode, limit=limit, offset=max(0, int(offset or 0)),
+                               year_min=year_min, year_max=year_max, collection=collection, doc_type=doc_type,
+                               sources=srcs)
     return {
         "query": query,
+        "mode_used": used,
         "filters": {k: v for k, v in dict(year_min=year_min, year_max=year_max, collection=collection,
                                             doc_type=doc_type, source=source, offset=offset or None).items() if v},
         "n": len(hits),
         "index_size": store().count(),
-        "hits": [_hit(h) for h in hits],
+        "hits": [_hit(h) | {k: h.get(k) for k in ("keyword_rank", "semantic_rank", "semantic_score") if h.get(k) is not None} for h in hits],
     }
 
 
@@ -167,7 +177,12 @@ def list_collections() -> dict[str, Any]:
 def harvest_status() -> dict[str, Any]:
     """Record counts per source, last harvest time/status and notes, coverage by year.
     If a source's last run is not 'complete' its part of the index may be partial."""
-    return _status(store())
+    st = _status(store())
+    idx = active_index(store())
+    st["embeddings"] = ({"backend": idx.meta.get("backend"), "model": idx.meta.get("model"), "dim": idx.meta.get("dim"),
+                         "vectors": len(idx), "coverage": round(len(idx) / max(store().count(), 1), 3),
+                         "updated_at": idx.meta.get("updated_at")} if idx else None)
+    return st
 
 
 @mcp.tool(annotations=RO)

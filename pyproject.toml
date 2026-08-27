@@ -9,9 +9,23 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.2,<3",
+    "numpy>=1.26",
     "pypdf>=6.0",
 ]
 keywords = ["mcp", "oai-pmh", "transportation", "grey-literature", "ntl", "rosap"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: Indexing",
+]
+
+[project.optional-dependencies]
+semantic = ["fastembed>=0.4; python_version < '3.14'"]
 
 [project.urls]
 Homepage = "https://github.com/aquistbe/dot-lit"
