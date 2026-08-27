@@ -148,7 +148,7 @@ def harvest(
     token: str | None = None
     effective_until = q_until
     if not config.CONTACT_EMAIL:
-        say("warning: DOT_LIT_CONTACT is not set; set it to your e-mail so the repository can reach you (good OAI-PMH citizenship)")
+        say("warning: TRANSPORT_LIT_CONTACT is not set; set it to your e-mail so the repository can reach you (good OAI-PMH citizenship)")
     say(f"run {run_id}: {source.key} {mode} harvest from={from_ts or '-'} until={until_ts} set={source.set_spec or '-'} ({config.MIN_REQUEST_INTERVAL}s pacing)")
 
     def finish(status: str) -> HarvestResult:

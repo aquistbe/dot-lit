@@ -2,8 +2,8 @@ import hashlib
 
 import numpy as np
 
-from dot_lit import embeddings as E
-from dot_lit.store import Store
+from transport_lit import embeddings as E
+from transport_lit.store import Store
 
 
 class FakeBackend:

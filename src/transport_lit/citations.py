@@ -41,7 +41,7 @@ def to_ris(recs: list[dict[str, Any]]) -> str:
         lines += [f"M3  - {n}" for n in (r.get("report_numbers") or [])]
         if r.get("language"):
             lines.append(f"LA  - {r['language']}")
-        lines.append(f"N1  - dot-lit id: {r['id']}")
+        lines.append(f"N1  - transport-lit id: {r['id']}")
         lines.append("ER  - ")
         out.append("\n".join(lines))
     return "\n\n".join(out) + "\n"
@@ -66,7 +66,7 @@ def to_bibtex(recs: list[dict[str, Any]]) -> str:
              "year": str(r.get("year") or ""), "institution" if entry == "techreport" else "publisher": r.get("publisher") or "",
              "journal" if entry == "article" else "series": r.get("source") or "", "number": "; ".join(r.get("report_numbers") or []),
              "doi": r.get("doi") or "", "url": r.get("landing_url") or "", "abstract": r.get("abstract") or "",
-             "keywords": ", ".join((r.get("subjects") or [])[:20]), "note": f"dot-lit id: {r['id']}"}
+             "keywords": ", ".join((r.get("subjects") or [])[:20]), "note": f"transport-lit id: {r['id']}"}
         body = ",\n".join(f"  {k} = {{{_esc(v)}}}" for k, v in f.items() if v)
         out.append(f"@{entry}{{{_bib_key(r)},\n{body}\n}}")
     return "\n\n".join(out) + "\n"

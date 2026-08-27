@@ -1,6 +1,6 @@
 import json
 
-from dot_lit.apis import cinii_parse, openalex_parse, pubmed_parse, pubmed_term
+from transport_lit.apis import cinii_parse, openalex_parse, pubmed_parse, pubmed_term
 
 
 def test_openalex_parse():

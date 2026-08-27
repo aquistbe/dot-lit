@@ -1,4 +1,4 @@
-from dot_lit.store import Store, normalize_id, tokenize_query
+from transport_lit.store import Store, normalize_id, tokenize_query
 
 
 def _rec(i, title, abstract="", year=2000, collections=()):
@@ -40,7 +40,7 @@ def test_normalize_id():
 
 
 def test_lookup_similar_whatsnew_citations(tmp_path):
-    from dot_lit.citations import to_bibtex, to_ris
+    from transport_lit.citations import to_bibtex, to_ris
     s = Store(tmp_path / "t.sqlite")
     s.upsert_records([
         {**_rec(1, "Driver improvement program evaluation", "negligent operator", 2007, ["Oregon DOT"]),

@@ -30,7 +30,7 @@ def build(store: Store, out: Path, *, include_vectors: bool = True, exclude_sour
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    db_copy = work / "dot-lit.sqlite"
+    db_copy = work / "transport-lit.sqlite"
     say("copying database (VACUUM INTO)…")
     store.conn.execute("VACUUM INTO ?", (str(db_copy),))
     if exclude_sources:

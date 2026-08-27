@@ -4,12 +4,12 @@ Backends
 --------
 * ``fastembed`` (default, CPU, no account): ``sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2``
   — 384 dims, ~220 MB one-time download, multilingual (en/sv/de/es/pt/ja/…).
-  Installed with the ``semantic`` extra:  ``uv tool install "dot-lit[semantic]"``.
+  Installed with the ``semantic`` extra:  ``uv tool install "transport-lit[semantic]"``.
 * ``ollama``: any embedding model served by a local Ollama (``qwen3-embedding:0.6b`` or
-  ``:8b``).  Vectors are Matryoshka-truncated to ``DOT_LIT_EMBED_DIM`` (default 1024) and
+  ``:8b``).  Vectors are Matryoshka-truncated to ``TRANSPORT_LIT_EMBED_DIM`` (default 1024) and
   re-normalised.  Needs nothing but httpx.
 
-Storage: ``$DOT_LIT_DATA_DIR/vectors/<slug>/{ids.json, vecs.npy (float16), meta.json}``;
+Storage: ``$TRANSPORT_LIT_DATA_DIR/vectors/<slug>/{ids.json, vecs.npy (float16), meta.json}``;
 the active set is recorded in the store's ``meta`` table.  Search is a chunked dot product
 over the memory-mapped matrix (≈50 ms for 350k × 384), no extension required.
 """
@@ -59,7 +59,7 @@ class FastEmbedBackend:
     name = "fastembed"
 
     def __init__(self, model: str | None = None):
-        self.model = model or os.environ.get("DOT_LIT_EMBED_MODEL") or DEFAULT_FASTEMBED_MODEL
+        self.model = model or os.environ.get("TRANSPORT_LIT_EMBED_MODEL") or DEFAULT_FASTEMBED_MODEL
         self._m = None
         self.dim = 0
 
@@ -68,7 +68,7 @@ class FastEmbedBackend:
             try:
                 from fastembed import TextEmbedding
             except ImportError as exc:  # pragma: no cover
-                raise RuntimeError("fastembed is not installed; `uv tool install 'dot-lit[semantic]'` "
+                raise RuntimeError("fastembed is not installed; `uv tool install 'transport-lit[semantic]'` "
                                    "or use --backend ollama") from exc
             MODEL_DIR.mkdir(parents=True, exist_ok=True)
             self._m = TextEmbedding(model_name=self.model, cache_dir=str(MODEL_DIR))
@@ -95,8 +95,8 @@ class OllamaBackend:
 
     def __init__(self, model: str | None = None, host: str | None = None, dim: int | None = None):
         self.host = (host or os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
-        self.model = model or os.environ.get("DOT_LIT_EMBED_MODEL") or self._pick()
-        self.max_dim = int(dim or os.environ.get("DOT_LIT_EMBED_DIM") or 1024)
+        self.model = model or os.environ.get("TRANSPORT_LIT_EMBED_MODEL") or self._pick()
+        self.max_dim = int(dim or os.environ.get("TRANSPORT_LIT_EMBED_DIM") or 1024)
         self.dim = 0
         self._client = httpx.Client(timeout=600)
 
@@ -131,7 +131,7 @@ class OllamaBackend:
 
 
 def make_backend(name: str | None = None, model: str | None = None, **kw) -> FastEmbedBackend | OllamaBackend:
-    name = name or os.environ.get("DOT_LIT_EMBED_BACKEND") or "fastembed"
+    name = name or os.environ.get("TRANSPORT_LIT_EMBED_BACKEND") or "fastembed"
     if name == "ollama":
         return OllamaBackend(model, **kw)
     if name == "fastembed":

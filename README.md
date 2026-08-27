@@ -1,6 +1,8 @@
-# dot-lit — U.S. DOT grey literature over MCP
+# transport-lit — transportation grey literature over MCP
 
-`dot-lit` gives an AI assistant (Claude Desktop, Claude Code, any MCP client) keyword
+*(Renamed from `dot-lit` on 2026-08-27; `DOT_LIT_*` environment variables and the old data directory are still recognised.)*
+
+`transport-lit` gives an AI assistant (Claude Desktop, Claude Code, any MCP client) keyword
 search over the transportation research reports that PubMed does not index and Semantic
 Scholar covers poorly. It started with **ROSA-P**, the U.S. National Transportation
 Library's repository (NHTSA *DOT HS* reports, FHWA/FRA/FTA/FAA, UTC and state DOT
@@ -16,21 +18,21 @@ continents plus whatever you export from TRID:
 | `ipea` | IPEA (Brazil) | 207 | filtered subset of 14,400; pt; precision ~16/20 |
 | `cepal` | CEPAL/ECLAC (Latin America) | 1,165 | filtered subset of 52,199; es/en; precision ~15/20 |
 | `openalex` | OpenAlex — works typed *report* in 10 transport topics (global) | 11,448 | topics: Traffic and Road Safety, Urban Transport and Accessibility, Transportation Planning, … |
-| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | 118,609 | needs a free NII application ID (`DOT_LIT_CINII_APPID`); 20 ja/en queries, 10k cap each; CJK queries use substring matching |
-| `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | 105,028 | date-sliced E-utilities harvest; `DOT_LIT_PUBMED_TERM` overrides the strategy |
-| `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
+| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | 118,609 | needs a free NII application ID (`TRANSPORT_LIT_CINII_APPID`); 20 ja/en queries, 10k cap each; CJK queries use substring matching |
+| `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | 105,028 | date-sliced E-utilities harvest; `TRANSPORT_LIT_PUBMED_TERM` overrides the strategy |
+| `trid` | TRID exports you import (`transport-lit import`) | yours | see below |
 
-`dot-lit sources` lists them; `dot-lit harvest --source <key>|all` harvests them; the
+`transport-lit sources` lists them; `transport-lit harvest --source <key>|all` harvests them; the
 `collection` filter in `search_reports` selects one (e.g. `"VTI"`, `"BASt"`, `"World Bank"`,
 `"CEPAL"`, `"TRID"`). Adding another OAI-PMH repository is one entry in
-`src/dot_lit/sources.py`.
+`src/transport_lit/sources.py`.
 
 > I created this for my own personal academic and research use and am happy to share it
 > with anyone else who finds it useful. I welcome feedback on errors, integration needs,
 > improvements and other commentaries. I will check those regularly and will integrate them
 > as much as possible and document that. If you are interested in helping to support this or
 > have other ideas for it, I welcome them! — Alex Quistberg
-> ([open an issue](https://github.com/aquistbe/dot-lit/issues))
+> ([open an issue](https://github.com/aquistbe/transport-lit/issues))
 
 It does this the only way that works for an OAI-PMH source: it **harvests the whole
 repository's metadata into a local SQLite database**, builds an **FTS5 full-text index**
@@ -69,13 +71,13 @@ Ranking is BM25 with title, report number and author weighted above abstract.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/aquistbe/dot-lit && cd dot-lit
-uv tool install .            # installs `dot-lit` (CLI) and `dot-lit-mcp` (server) on PATH
-export DOT_LIT_CONTACT=you@example.org   # identifies your harvester to ROSA-P (put it in your shell profile)
-dot-lit probe                # live check: Identify / ListMetadataFormats / ListSets
-dot-lit harvest              # full harvest the first time (~15 min), incremental afterwards
-dot-lit status               # counts, last run, coverage by year
-dot-lit search driver improvement program evaluation
+git clone https://github.com/aquistbe/transport-lit && cd transport-lit
+uv tool install .            # installs `transport-lit` (CLI) and `transport-lit-mcp` (server) on PATH
+export TRANSPORT_LIT_CONTACT=you@example.org   # identifies your harvester to ROSA-P (put it in your shell profile)
+transport-lit probe                # live check: Identify / ListMetadataFormats / ListSets
+transport-lit harvest              # full harvest the first time (~15 min), incremental afterwards
+transport-lit status               # counts, last run, coverage by year
+transport-lit search driver improvement program evaluation
 ```
 
 For development use `uv sync` and prefix commands with `uv run` (e.g. `uv run pytest`).
@@ -83,7 +85,7 @@ For development use `uv sync` and prefix commands with `uv run` (e.g. `uv run py
 ### Any MCP client, any model
 
 The server speaks standard MCP over **stdio** (default) and **Streamable HTTP** / SSE
-(`dot-lit-mcp --transport streamable-http --port 8765`, endpoint `/mcp`). `dot-lit
+(`transport-lit-mcp --transport streamable-http --port 8765`, endpoint `/mcp`). `transport-lit
 mcp-config [client]` prints a ready-to-paste snippet for: Claude Desktop, Claude Code,
 Cursor, VS Code (Copilot agent mode), Zed, Continue, LM Studio, Goose, Open WebUI and
 LibreChat (the last two over HTTP). A `Dockerfile` builds an HTTP server image with the
@@ -102,44 +104,44 @@ tests/ollama_smoke.py "…"`.
 ### Register in Claude Desktop
 
 ```bash
-dot-lit install-claude-desktop          # prints the JSON to add
-dot-lit install-claude-desktop --write  # merges it into claude_desktop_config.json (keeps a .bak)
+transport-lit install-claude-desktop          # prints the JSON to add
+transport-lit install-claude-desktop --write  # merges it into claude_desktop_config.json (keeps a .bak)
 ```
 
 The entry it writes is simply:
 
 ```json
-{ "mcpServers": { "dot-lit": { "command": "/Users/you/.local/bin/dot-lit-mcp", "args": [],
-                               "env": { "DOT_LIT_DATA_DIR": "/Users/you/.local/share/dot-lit",
-                                        "DOT_LIT_CONTACT": "you@example.org" } } } }
+{ "mcpServers": { "transport-lit": { "command": "/Users/you/.local/bin/transport-lit-mcp", "args": [],
+                               "env": { "TRANSPORT_LIT_DATA_DIR": "/Users/you/.local/share/transport-lit",
+                                        "TRANSPORT_LIT_CONTACT": "you@example.org" } } } }
 ```
 
-Restart Claude Desktop afterwards. For Claude Code: `claude mcp add dot-lit -- dot-lit-mcp`.
+Restart Claude Desktop afterwards. For Claude Code: `claude mcp add transport-lit -- transport-lit-mcp`.
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DOT_LIT_DATA_DIR` | `~/.local/share/dot-lit` | SQLite DB, raw OAI pages (`raw/`), PDF cache (`pdf/`) |
-| `DOT_LIT_CONTACT` | *(unset)* | Your e-mail, placed in the User-Agent so the repository can contact you. Set it. |
-| `DOT_LIT_MIN_INTERVAL` | `1.0` | Minimum seconds between outbound requests |
-| `DOT_LIT_HTTP_TIMEOUT` | `90` | Per-request timeout (s) |
-| `DOT_LIT_MAX_PDF_BYTES` | 80 MB | Refuse larger PDFs in `get_fulltext` |
-| `DOT_LIT_MAX_PDF_PAGES` | 600 | Stop extraction after this many pages |
-| `DOT_LIT_CINII_APPID` | *(unset)* | NII application ID; required to harvest CiNii (register at support.nii.ac.jp/en/cinii/api/developer) |
+| `TRANSPORT_LIT_DATA_DIR` | `~/.local/share/transport-lit` | SQLite DB, raw OAI pages (`raw/`), PDF cache (`pdf/`) |
+| `TRANSPORT_LIT_CONTACT` | *(unset)* | Your e-mail, placed in the User-Agent so the repository can contact you. Set it. |
+| `TRANSPORT_LIT_MIN_INTERVAL` | `1.0` | Minimum seconds between outbound requests |
+| `TRANSPORT_LIT_HTTP_TIMEOUT` | `90` | Per-request timeout (s) |
+| `TRANSPORT_LIT_MAX_PDF_BYTES` | 80 MB | Refuse larger PDFs in `get_fulltext` |
+| `TRANSPORT_LIT_MAX_PDF_PAGES` | 600 | Stop extraction after this many pages |
+| `TRANSPORT_LIT_CINII_APPID` | *(unset)* | NII application ID; required to harvest CiNii (register at support.nii.ac.jp/en/cinii/api/developer) |
 | `NCBI_API_KEY` | *(unset)* | Optional; raises PubMed E-utilities rate from 3 to 10 req/s |
-| `DOT_LIT_PUBMED_TERM` | built-in strategy | Replace the PubMed search strategy |
-| `DOT_LIT_EMBED_BACKEND` / `DOT_LIT_EMBED_MODEL` / `DOT_LIT_EMBED_DIM` | fastembed / MiniLM-L12 / 1024 | Semantic search backend, model, Ollama truncation |
+| `TRANSPORT_LIT_PUBMED_TERM` | built-in strategy | Replace the PubMed search strategy |
+| `TRANSPORT_LIT_EMBED_BACKEND` / `TRANSPORT_LIT_EMBED_MODEL` / `TRANSPORT_LIT_EMBED_DIM` | fastembed / MiniLM-L12 / 1024 | Semantic search backend, model, Ollama truncation |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint for the `ollama` backend |
 
 No credentials are used or stored anywhere; every request goes to public endpoints.
 
 ### Install without cloning (PyPI)
 
-Once published, `uv tool install dot-lit` / `uvx --from dot-lit dot-lit-mcp` run it straight
+Once published, `uv tool install transport-lit` / `uvx --from transport-lit transport-lit-mcp` run it straight
 from PyPI (the wheel is verified with `twine check` and a clean-venv install in CI). To arm
 publishing, the maintainer does this once on pypi.org: **Account → Publishing → Add a new
-pending publisher** with project `dot-lit`, owner `aquistbe`, repository `dot-lit`, workflow
+pending publisher** with project `transport-lit`, owner `aquistbe`, repository `transport-lit`, workflow
 `publish.yml`, environment `pypi`. The next GitHub Release (or a manual run of the
 *publish-pypi* workflow) then uploads automatically; no API token is stored anywhere. `server.json` is the manifest for the
 MCP Registry (`registry.modelcontextprotocol.io`), to submit after the PyPI package exists.
@@ -154,20 +156,20 @@ installs with `uv sync --frozen`, so a release always runs against the exact ver
 tested with. To install a specific version:
 
 ```bash
-uv tool install git+https://github.com/aquistbe/dot-lit@v0.1.0
-uv tool upgrade dot-lit          # later, to move to whatever main points at
+uv tool install git+https://github.com/aquistbe/transport-lit@v0.1.0
+uv tool upgrade transport-lit          # later, to move to whatever main points at
 ```
 
 ## Harvesting
 
 ```bash
-dot-lit harvest                     # ROSA-P; auto: incremental if a complete full harvest exists, else full
-dot-lit harvest --source all        # every configured source (vti, bast, wbokr, ipea, cepal, rosap)
-dot-lit harvest --mode full         # walk the whole repository again
-dot-lit harvest --mode incremental  # from = start of last complete run − 1 h, until = now
-dot-lit harvest --from 2026-08-01T00:00:00Z   # explicit window (full timestamp required)
-dot-lit harvest --max-pages 3       # testing only; the run is recorded as failed/partial
-dot-lit reindex                     # re-parse the cached raw pages (no network) after a parser change
+transport-lit harvest                     # ROSA-P; auto: incremental if a complete full harvest exists, else full
+transport-lit harvest --source all        # every configured source (vti, bast, wbokr, ipea, cepal, rosap)
+transport-lit harvest --mode full         # walk the whole repository again
+transport-lit harvest --mode incremental  # from = start of last complete run − 1 h, until = now
+transport-lit harvest --from 2026-08-01T00:00:00Z   # explicit window (full timestamp required)
+transport-lit harvest --max-pages 3       # testing only; the run is recorded as failed/partial
+transport-lit reindex                     # re-parse the cached raw pages (no network) after a parser change
 ```
 
 What the harvester does and why (all behaviour verified against ROSA-P on 2026-08-26):
@@ -176,7 +178,7 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   until a page arrives **without** one. Only then is the run marked `complete`; any error
   leaves it `failed` and does not advance the "last harvest" pointer, so `harvest_status`
   never claims a partial index is complete.
-* **Pacing:** one request per `DOT_LIT_MIN_INTERVAL` seconds (default 1 s). Tokens expire
+* **Pacing:** one request per `TRANSPORT_LIT_MIN_INTERVAL` seconds (default 1 s). Tokens expire
   about 60 s after issue, so retries use short backoff (2/4/6 s).
 * **`badResumptionToken`, transport errors, truncated XML, or an empty envelope while a
   token is live** → the list is re-issued. ROSA-P does *not* return records in a stable
@@ -191,7 +193,7 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   flagged in the run notes. Both appear in `harvest_status().last_harvest.notes`.
 * **Deletions:** the repository reports `deletedRecord=no`, so nothing is ever removed
   locally; a record that vanishes from ROSA-P stays in the index until a full re-harvest
-  into a fresh `DOT_LIT_DATA_DIR`.
+  into a fresh `TRANSPORT_LIT_DATA_DIR`.
 * **Caching:** every OAI page is stored gzipped under `raw/run<N>-p<page>.xml.gz`, so the
   parser can be changed and the index rebuilt without touching the network; PDFs and their
   extracted text are cached under `pdf/` and in the `fulltext` table.
@@ -206,9 +208,9 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   record). This was tuned on 2026-08-26 against random 20-title samples: the loose
   title+subjects+abstract rule kept 15,271 World Bank records at roughly 35–50 % precision;
   the final rule keeps 976 at 18/20, IPEA 207 at ~16/20, CEPAL 1,165 at ~15/20. Recall is
-  the price; loosen `min_subject_hits` in `sources.py` and run `dot-lit reindex --source
+  the price; loosen `min_subject_hits` in `sources.py` and run `transport-lit reindex --source
   <key>` (no network) if you want the other trade. The run notes record kept vs skipped.
-* `dot-lit reindex --source <key>` re-parses the cached pages **and prunes** records the
+* `transport-lit reindex --source <key>` re-parses the cached pages **and prunes** records the
   current parser/filter no longer keeps, so filter changes never need a re-harvest.
 
 ### Monthly rebuild and weekly updates (maintenance schedule)
@@ -220,15 +222,15 @@ ever disappear (its OAI-PMH endpoint does not track deletions). Imported sources
 exports) are untouched, and a failed rebuild changes nothing.
 
 ```bash
-dot-lit install-schedule          # shows the two launchd agents
-dot-lit install-schedule --write  # installs them: Mon 06:00 `--source all` incremental, 1st 05:00 `--source all --fresh`
+transport-lit install-schedule          # shows the two launchd agents
+transport-lit install-schedule --write  # installs them: Mon 06:00 `--source all` incremental, 1st 05:00 `--source all --fresh`
 ```
 
-Logs land in `$DOT_LIT_DATA_DIR/logs/`. On Linux use the cron lines the command prints.
+Logs land in `$TRANSPORT_LIT_DATA_DIR/logs/`. On Linux use the cron lines the command prints.
 
 Monthly maintenance checklist (done with the rebuild): read new GitHub issues; `uv lock
 --upgrade && uv run pytest`; note fixes in the changelog section of the release; bump
-`version` in `pyproject.toml` and `src/dot_lit/__init__.py`; `git tag vX.Y.Z && git push
+`version` in `pyproject.toml` and `src/transport_lit/__init__.py`; `git tag vX.Y.Z && git push
 --tags`.
 
 ### TRID: import what you export
@@ -239,7 +241,7 @@ TRID backend systems or lift export/download restrictions", and its `robots.txt`
 AI crawlers. What every user *may* do is search and export. So:
 
 1. Run your search in TRID, choose **Export → RIS** (CSV and XML are also offered).
-2. `dot-lit import ~/Downloads/trid-driver-improvement.ris --collection "TRID: driver improvement"`
+2. `transport-lit import ~/Downloads/trid-driver-improvement.ris --collection "TRID: driver improvement"`
 
 Records get ids `trid:<accession>` from the TRID view URL, land in the `TRID` collection
 (`search_reports(..., collection="TRID")`), and re-importing the same file is idempotent.
@@ -306,7 +308,7 @@ bare-year description line (22,205) or the title (3,585)):
 | 1960s | 2,947 | 2010s | 18,690 |
 | 1970s | 5,057 | 2020s | 13,456 |
 
-**Known-item retrieval** (`dot-lit search …`, rank 1 unless noted):
+**Known-item retrieval** (`transport-lit search …`, rank 1 unless noted):
 
 | Target | Query | Result |
 |--------|-------|--------|
@@ -330,7 +332,7 @@ fallback, FTS search/filters, upsert idempotence, query tokenizer, id normalisat
 ## Layout
 
 ```
-src/dot_lit/
+src/transport_lit/
   config.py    paths, User-Agent, pacing, limits (env-overridable)
   oai.py       rate-limited OAI-PMH client; typed errors; raw-page cache
   dc.py        oai_dc record -> typed dict (authors, year, DOI, report numbers, collections …)
@@ -339,7 +341,7 @@ src/dot_lit/
   fulltext.py  PDF resolution, download (size-capped), pypdf extraction, cache
   server.py    MCP tools (FastMCP / MCPServer)
   importers.py RIS import (TRID exports and any other reference-manager export)
-  cli.py       dot-lit probe | harvest [--fresh] | import | reindex | status | search | get | fulltext
+  cli.py       transport-lit probe | harvest [--fresh] | import | reindex | status | search | get | fulltext
                | install-claude-desktop | install-schedule
 .github/workflows/  ci.yml (tests on push/PR), release.yml (wheel + GitHub Release on tag)
 tests/         unit tests (parser, store, query tokenizer)
@@ -351,7 +353,7 @@ The store is source-agnostic: `records.id` is a prefixed string (`dot:93144` tod
 `harvest_runs.source` records which harvester wrote a run, and the FTS index does not care
 where a row came from. To add a source:
 
-1. Write `src/dot_lit/sources/<name>.py` exposing `harvest(store, *, mode, progress)` that
+1. Write `src/transport_lit/sources/<name>.py` exposing `harvest(store, *, mode, progress)` that
    yields dicts in the same shape `dc.parse_record` produces (`id`, `title`, `authors`,
    `year`, `abstract`, `report_numbers`, `doi`, `landing_url`, `collections`, `raw`, …) and
    calls `store.upsert_records()`. Use a new id prefix (`nhtsa:812115`) and pass your own
@@ -359,7 +361,7 @@ where a row came from. To add a source:
 2. Reuse `oai.RateLimiter` and `config.USER_AGENT` for etiquette; store raw responses under
    `raw/<source>/` for reproducibility.
 3. Give `harvest.status()` a per-source block (count by `id` prefix).
-4. Add a `--source` option to `dot-lit harvest` and, if the source has its own facet, a
+4. Add a `--source` option to `transport-lit harvest` and, if the source has its own facet, a
    corresponding filter on `search_reports`.
 5. Dedupe against ROSA-P by DOI / report number (`records.doi`, `records.report_numbers`)
    rather than by title — NHTSA reports are often present in both places.
@@ -450,7 +452,7 @@ host name) when checked on 2026-08-26, so its current status is unconfirmed.
 
 ### Weekly digest (a SafetyLit-style bulletin)
 
-`dot-lit digest --days 7 [--abstracts]` prints a Markdown bulletin of everything that entered
+`transport-lit digest --days 7 [--abstracts]` prints a Markdown bulletin of everything that entered
 the index in the last week, grouped by source, with counts. It is driven by `first_seen_at`,
 which is set the first time a record is seen and preserved across fresh rebuilds, so a
 monthly rebuild does not make the whole index look new. The `whats_new` tool exposes the
@@ -460,7 +462,7 @@ by hand.
 ### Compared with other literature MCPs
 
 PubMed, Semantic Scholar, OpenAlex and arXiv MCP servers proxy live queries to one API.
-`dot-lit` differs in three ways: it indexes **grey literature the aggregators lack** (agency
+`transport-lit` differs in three ways: it indexes **grey literature the aggregators lack** (agency
 reports, state DOT evaluations, ITRD-contributing institutes), it **runs offline** on a local
 index after harvesting (no rate limits at query time, no key), and it is **multi-source**
 with one id scheme, so a model can search everything at once and export citations. What
@@ -475,14 +477,14 @@ languages — an English query reaching Swedish, German, Spanish, Portuguese or 
 records. Everything runs locally; no account, no GPU.
 
 ```bash
-uv tool install "dot-lit[semantic]"   # adds fastembed (ONNX runtime), ~60 MB
-dot-lit embed                         # default backend: fastembed, multilingual MiniLM-L12 (384-d, 220 MB model, one-time download)
-dot-lit embed --backend ollama --model qwen3-embedding:8b     # opt-in: any Ollama embedding model, truncated to 1024-d
-dot-lit search "programa de mejoramiento de conductores" --mode semantic
+uv tool install "transport-lit[semantic]"   # adds fastembed (ONNX runtime), ~60 MB
+transport-lit embed                         # default backend: fastembed, multilingual MiniLM-L12 (384-d, 220 MB model, one-time download)
+transport-lit embed --backend ollama --model qwen3-embedding:8b     # opt-in: any Ollama embedding model, truncated to 1024-d
+transport-lit search "programa de mejoramiento de conductores" --mode semantic
 ```
 
 `embed` only processes records that have no vector yet, so after the first pass the weekly
-harvest adds seconds. Vectors live in `$DOT_LIT_DATA_DIR/vectors/<backend-model>/` as a
+harvest adds seconds. Vectors live in `$TRANSPORT_LIT_DATA_DIR/vectors/<backend-model>/` as a
 memory-mapped float16 matrix (342k × 384 ≈ 260 MB); search is a chunked dot product, no
 extension. The active vector set is recorded in the index, so `search_reports(mode=…)`
 uses whichever backend produced it: `hybrid` (default), `keyword`, or `semantic`;
@@ -501,9 +503,9 @@ never run the full pass at all.
 
 ### Snapshots: skip the harvest
 
-`dot-lit snapshot build dot-lit-YYYY-MM.tar.gz` packs the SQLite index plus the active
-vectors; `dot-lit snapshot install <url-or-file>` unpacks one into a fresh
-`DOT_LIT_DATA_DIR`, after which weekly incremental harvests keep it current. Snapshots
+`transport-lit snapshot build transport-lit-YYYY-MM.tar.gz` packs the SQLite index plus the active
+vectors; `transport-lit snapshot install <url-or-file>` unpacks one into a fresh
+`TRANSPORT_LIT_DATA_DIR`, after which weekly incremental harvests keep it current. Snapshots
 leave out **CiNii** (its API terms require registration and are silent on redistribution)
 and **TRID** imports (TRB's terms); users harvest those themselves. Releases carry a
 snapshot when one was built.

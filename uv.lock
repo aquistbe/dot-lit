@@ -341,40 +341,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dot-lit"
-version = "0.3.0"
-source = { editable = "." }
-dependencies = [
-    { name = "httpx" },
-    { name = "mcp", extra = ["cli"] },
-    { name = "numpy" },
-    { name = "pypdf" },
-]
-
-[package.optional-dependencies]
-semantic = [
-    { name = "fastembed", marker = "python_full_version < '3.14'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastembed", marker = "python_full_version < '3.14' and extra == 'semantic'", specifier = ">=0.4" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.2,<3" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pypdf", specifier = ">=6.0" },
-]
-provides-extras = ["semantic"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
-
-[[package]]
 name = "fastembed"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1483,6 +1449,40 @@ sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ff
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953", size = 80184, upload-time = "2026-07-27T11:33:13.167Z" },
 ]
+
+[[package]]
+name = "transport-lit"
+version = "0.3.0"
+source = { editable = "." }
+dependencies = [
+    { name = "httpx" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "numpy" },
+    { name = "pypdf" },
+]
+
+[package.optional-dependencies]
+semantic = [
+    { name = "fastembed", marker = "python_full_version < '3.14'" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastembed", marker = "python_full_version < '3.14' and extra == 'semantic'", specifier = ">=0.4" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.2,<3" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pypdf", specifier = ">=6.0" },
+]
+provides-extras = ["semantic"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "truststore"

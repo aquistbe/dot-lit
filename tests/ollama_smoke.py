@@ -1,4 +1,4 @@
-"""Minimal open-model tool-calling loop: Ollama chat model <-> dot-lit MCP server over stdio.
+"""Minimal open-model tool-calling loop: Ollama chat model <-> transport-lit MCP server over stdio.
 
     ollama pull qwen2.5:3b
     uv run python tests/ollama_smoke.py "Find reports about driver improvement programs; list 3 titles with years."
@@ -18,7 +18,7 @@ OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
 
 async def main(question: str) -> int:
-    params = StdioServerParameters(command=sys.executable, args=["-m", "dot_lit.server"], env=dict(os.environ))
+    params = StdioServerParameters(command=sys.executable, args=["-m", "transport_lit.server"], env=dict(os.environ))
     async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
         await s.initialize()
         tools = (await s.list_tools()).tools

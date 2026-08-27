@@ -1,15 +1,15 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.aquistbe/dot-lit",
+  "name": "io.github.aquistbe/transport-lit",
   "description": "Searchable index of transportation grey literature (ROSA-P/U.S. DOT, VTI, BASt, World Bank, CEPAL, IPEA, OpenAlex reports, CiNii, PubMed subset, TRID imports)",
-  "repository": { "url": "https://github.com/aquistbe/dot-lit", "source": "github" },
+  "repository": { "url": "https://github.com/aquistbe/transport-lit", "source": "github" },
   "version_detail": { "version": "0.3.0" },
   "packages": [
-    { "registry_name": "pypi", "name": "dot-lit", "version": "0.3.0", "runtime_hint": "uvx",
-      "package_arguments": [{ "type": "positional", "value": "dot-lit-mcp" }],
+    { "registry_name": "pypi", "name": "transport-lit", "version": "0.3.0", "runtime_hint": "uvx",
+      "package_arguments": [{ "type": "positional", "value": "transport-lit-mcp" }],
       "environment_variables": [
-        { "name": "DOT_LIT_DATA_DIR", "description": "Directory holding the SQLite index (run `dot-lit harvest` first)" },
-        { "name": "DOT_LIT_CONTACT", "description": "Your e-mail, sent in the User-Agent to the harvested repositories" }
+        { "name": "TRANSPORT_LIT_DATA_DIR", "description": "Directory holding the SQLite index (run `transport-lit harvest` first)" },
+        { "name": "TRANSPORT_LIT_CONTACT", "description": "Your e-mail, sent in the User-Agent to the harvested repositories" }
       ] }
   ]
 }

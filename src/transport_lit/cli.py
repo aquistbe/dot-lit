@@ -220,24 +220,24 @@ def cmd_digest(a: argparse.Namespace) -> int:
 
 def cmd_mcp_config(a: argparse.Namespace) -> int:
     """Print MCP client configuration snippets for common clients."""
-    exe = shutil.which("dot-lit-mcp") or str(Path(sys.argv[0]).resolve().parent / "dot-lit-mcp")
-    env = {"DOT_LIT_DATA_DIR": str(config.DATA_DIR)}
+    exe = shutil.which("transport-lit-mcp") or str(Path(sys.argv[0]).resolve().parent / "transport-lit-mcp")
+    env = {"TRANSPORT_LIT_DATA_DIR": str(config.DATA_DIR)}
     if config.CONTACT_EMAIL:
-        env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
+        env["TRANSPORT_LIT_CONTACT"] = config.CONTACT_EMAIL
     stdio = {"command": exe, "args": [], "env": env}
     http = "http://127.0.0.1:8765/mcp"
     snippets = {
-        "claude-desktop": ("~/Library/Application Support/Claude/claude_desktop_config.json (or `dot-lit install-claude-desktop --write`)",
-                           json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
-        "claude-code": ("shell", f"claude mcp add dot-lit -e DOT_LIT_DATA_DIR={config.DATA_DIR} -- {exe}"),
-        "cursor": ("~/.cursor/mcp.json", json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
-        "vscode": (".vscode/mcp.json (GitHub Copilot agent mode)", json.dumps({"servers": {"dot-lit": {"type": "stdio", **stdio}}}, indent=2)),
-        "zed": ("~/.config/zed/settings.json", json.dumps({"context_servers": {"dot-lit": {"command": {"path": exe, "args": [], "env": env}}}}, indent=2)),
-        "continue": ("~/.continue/config.yaml", "mcpServers:\n  - name: dot-lit\n    command: " + exe + "\n    env:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
-        "lm-studio": ("LM Studio > Program > Install > Edit mcp.json", json.dumps({"mcpServers": {"dot-lit": stdio}}, indent=2)),
-        "goose": ("~/.config/goose/config.yaml", "extensions:\n  dot-lit:\n    type: stdio\n    enabled: true\n    cmd: " + exe + "\n    args: []\n    envs:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
-        "open-webui": ("Run `dot-lit-mcp --transport streamable-http --port 8765`, then add as a Streamable HTTP tool server", http),
-        "librechat": ("librechat.yaml", "mcpServers:\n  dot-lit:\n    type: streamable-http\n    url: " + http),
+        "claude-desktop": ("~/Library/Application Support/Claude/claude_desktop_config.json (or `transport-lit install-claude-desktop --write`)",
+                           json.dumps({"mcpServers": {"transport-lit": stdio}}, indent=2)),
+        "claude-code": ("shell", f"claude mcp add transport-lit -e TRANSPORT_LIT_DATA_DIR={config.DATA_DIR} -- {exe}"),
+        "cursor": ("~/.cursor/mcp.json", json.dumps({"mcpServers": {"transport-lit": stdio}}, indent=2)),
+        "vscode": (".vscode/mcp.json (GitHub Copilot agent mode)", json.dumps({"servers": {"transport-lit": {"type": "stdio", **stdio}}}, indent=2)),
+        "zed": ("~/.config/zed/settings.json", json.dumps({"context_servers": {"transport-lit": {"command": {"path": exe, "args": [], "env": env}}}}, indent=2)),
+        "continue": ("~/.continue/config.yaml", "mcpServers:\n  - name: transport-lit\n    command: " + exe + "\n    env:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
+        "lm-studio": ("LM Studio > Program > Install > Edit mcp.json", json.dumps({"mcpServers": {"transport-lit": stdio}}, indent=2)),
+        "goose": ("~/.config/goose/config.yaml", "extensions:\n  transport-lit:\n    type: stdio\n    enabled: true\n    cmd: " + exe + "\n    args: []\n    envs:\n" + "".join(f"      {k}: {v}\n" for k, v in env.items())),
+        "open-webui": ("Run `transport-lit-mcp --transport streamable-http --port 8765`, then add as a Streamable HTTP tool server", http),
+        "librechat": ("librechat.yaml", "mcpServers:\n  transport-lit:\n    type: streamable-http\n    url: " + http),
         "ollama-python": ("see tests/ollama_smoke.py for a minimal tool-calling loop over stdio", ""),
     }
     keys = [a.client] if a.client else list(snippets)
@@ -260,20 +260,20 @@ def claude_desktop_config_path() -> Path:
 
 
 def cmd_install(a: argparse.Namespace) -> int:
-    exe = shutil.which("dot-lit-mcp")
+    exe = shutil.which("transport-lit-mcp")
     if not exe:
         # fall back to the script next to the running interpreter (uv tool / venv layout)
-        cand = Path(sys.argv[0]).resolve().parent / "dot-lit-mcp"
+        cand = Path(sys.argv[0]).resolve().parent / "transport-lit-mcp"
         exe = str(cand) if cand.exists() else None
     if not exe:
-        print("dot-lit-mcp not found on PATH; install with `uv tool install .` first", file=sys.stderr)
+        print("transport-lit-mcp not found on PATH; install with `uv tool install .` first", file=sys.stderr)
         return 1
-    env = {"DOT_LIT_DATA_DIR": str(config.DATA_DIR)}
+    env = {"TRANSPORT_LIT_DATA_DIR": str(config.DATA_DIR)}
     if config.CONTACT_EMAIL:
-        env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
+        env["TRANSPORT_LIT_CONTACT"] = config.CONTACT_EMAIL
     entry = {"command": exe, "args": [], "env": env}
     path = claude_desktop_config_path()
-    snippet = {"mcpServers": {"dot-lit": entry}}
+    snippet = {"mcpServers": {"transport-lit": entry}}
     if not a.write:
         print(f"# Add this to {path}\n{json.dumps(snippet, indent=2)}")
         print("\n# Re-run with --write to merge it into that file (a .bak copy is made first).")
@@ -282,7 +282,8 @@ def cmd_install(a: argparse.Namespace) -> int:
     if path.exists():
         cfg = json.loads(path.read_text() or "{}")
         shutil.copy(path, path.with_suffix(".json.bak"))
-    cfg.setdefault("mcpServers", {})["dot-lit"] = entry
+    cfg.setdefault("mcpServers", {}).pop("dot-lit", None)  # entry written under the project's former name
+    cfg["mcpServers"]["transport-lit"] = entry
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2))
     print(f"wrote {path} (backup at {path.with_suffix('.json.bak')}); restart Claude Desktop")
@@ -307,21 +308,27 @@ def cmd_install_schedule(a: argparse.Namespace) -> int:
     """macOS launchd: weekly incremental harvest (Mon 06:00) + monthly fresh rebuild (1st, 05:00)."""
     if sys.platform != "darwin":
         print("install-schedule writes launchd agents (macOS). On Linux use cron, e.g.:\n"
-              "  0 6 * * 1   dot-lit harvest --source all --mode incremental >> ~/.local/share/dot-lit/logs/weekly.log 2>&1\n"
-              "  0 5 1 * *   dot-lit harvest --source all --fresh            >> ~/.local/share/dot-lit/logs/monthly.log 2>&1",
+              "  0 6 * * 1   transport-lit harvest --source all --mode incremental >> ~/.local/share/transport-lit/logs/weekly.log 2>&1\n"
+              "  0 5 1 * *   transport-lit harvest --source all --fresh            >> ~/.local/share/transport-lit/logs/monthly.log 2>&1",
               file=sys.stderr)
         return 1
-    exe = shutil.which("dot-lit") or str(Path(sys.argv[0]).resolve())
+    exe = shutil.which("transport-lit") or str(Path(sys.argv[0]).resolve())
     logs = config.DATA_DIR / "logs"
-    env = {"DOT_LIT_DATA_DIR": str(config.DATA_DIR), "PATH": "/usr/local/bin:/usr/bin:/bin:" + str(Path(exe).parent)}
+    env = {"TRANSPORT_LIT_DATA_DIR": str(config.DATA_DIR), "PATH": "/usr/local/bin:/usr/bin:/bin:" + str(Path(exe).parent)}
     if config.CONTACT_EMAIL:
-        env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
+        env["TRANSPORT_LIT_CONTACT"] = config.CONTACT_EMAIL
     jobs = {
-        "org.dot-lit.harvest-weekly": (["harvest", "--source", "all", "--mode", "incremental"], {"Weekday": 1, "Hour": 6, "Minute": 0}),
-        "org.dot-lit.harvest-monthly": (["harvest", "--source", "all", "--fresh"], {"Day": 1, "Hour": 5, "Minute": 0}),
+        "org.transport-lit.harvest-weekly": (["harvest", "--source", "all", "--mode", "incremental"], {"Weekday": 1, "Hour": 6, "Minute": 0}),
+        "org.transport-lit.harvest-monthly": (["harvest", "--source", "all", "--fresh"], {"Day": 1, "Hour": 5, "Minute": 0}),
     }
     agents = Path("~/Library/LaunchAgents").expanduser()
     written = []
+    if a.write:  # retire agents installed under the former name
+        import os as _os
+        import subprocess as _sp
+        for old in agents.glob("org.dot-lit.*.plist"):
+            _sp.run(["launchctl", "bootout", f"gui/{_os.getuid()}", str(old)], capture_output=True)
+            old.unlink()
     for label, (args, cal) in jobs.items():
         xml = PLIST.format(
             label=label,
@@ -350,7 +357,7 @@ def cmd_install_schedule(a: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="dot-lit", description="U.S. DOT grey-literature index (ROSA-P)")
+    p = argparse.ArgumentParser(prog="transport-lit", description="U.S. DOT grey-literature index (ROSA-P)")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -360,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("sources", help="list configured OAI-PMH sources").set_defaults(fn=cmd_sources)
 
     h = sub.add_parser("harvest", help="harvest a source (default rosap) into the local index")
-    h.add_argument("--source", default="rosap", help="source key from `dot-lit sources`, or 'all'")
+    h.add_argument("--source", default="rosap", help="source key from `transport-lit sources`, or 'all'")
     h.add_argument("--mode", choices=["auto", "full", "incremental"], default="auto")
     h.add_argument("--from", dest="from", help="OAI from= (YYYY-MM-DDThh:mm:ssZ); overrides mode")
     h.add_argument("--until", help="OAI until= (YYYY-MM-DDThh:mm:ssZ)")
@@ -404,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
     sch.set_defaults(fn=cmd_install_schedule)
 
     em = sub.add_parser("embed", help="compute embeddings for records that lack them (semantic search)")
-    em.add_argument("--backend", choices=["fastembed", "ollama"], default=None, help="default: $DOT_LIT_EMBED_BACKEND or fastembed")
+    em.add_argument("--backend", choices=["fastembed", "ollama"], default=None, help="default: $TRANSPORT_LIT_EMBED_BACKEND or fastembed")
     em.add_argument("--model", help="fastembed model name or Ollama model tag (e.g. qwen3-embedding:8b)")
     em.add_argument("--dim", type=int, help="ollama only: truncate vectors to this many dims (default 1024)")
     em.add_argument("--rebuild", action="store_true")

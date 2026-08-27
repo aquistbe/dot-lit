@@ -1,6 +1,6 @@
 name: publish-pypi
 # Publishes to PyPI via trusted publishing (OIDC). One-time setup by the maintainer:
-# pypi.org -> your project -> Publishing -> add GitHub publisher (owner aquistbe, repo dot-lit,
+# pypi.org -> your project -> Publishing -> add GitHub publisher (owner aquistbe, repo transport-lit,
 # workflow publish.yml, environment pypi). Until then this workflow fails at the upload step.
 on:
   release:

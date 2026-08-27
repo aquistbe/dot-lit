@@ -1,5 +1,5 @@
 [project]
-name = "dot-lit"
+name = "transport-lit"
 version = "0.3.0"
 description = "MCP server giving searchable access to U.S. DOT grey literature (ROSA-P / National Transportation Library) via a locally harvested OAI-PMH index"
 readme = "README.md"
@@ -28,12 +28,12 @@ classifiers = [
 semantic = ["fastembed>=0.4; python_version < '3.14'"]
 
 [project.urls]
-Homepage = "https://github.com/aquistbe/dot-lit"
-Repository = "https://github.com/aquistbe/dot-lit"
+Homepage = "https://github.com/aquistbe/transport-lit"
+Repository = "https://github.com/aquistbe/transport-lit"
 
 [project.scripts]
-dot-lit = "dot_lit.cli:main"
-dot-lit-mcp = "dot_lit.server:main"
+transport-lit = "transport_lit.cli:main"
+transport-lit-mcp = "transport_lit.server:main"
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12.0"]

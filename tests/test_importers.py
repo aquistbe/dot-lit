@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from dot_lit.importers import import_ris, parse_ris, ris_to_record
-from dot_lit.store import Store
+from transport_lit.importers import import_ris, parse_ris, ris_to_record
+from transport_lit.store import Store
 
 RIS = """TY  - RPRT
 TI  - Evaluation of the Oregon DMV Driver Improvement Program

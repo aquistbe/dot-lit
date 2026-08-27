@@ -4,7 +4,7 @@ PubMed E-utilities (transport/injury subset).
 Unlike OAI-PMH these have no "list everything" verb, so each source defines
   pages(client, since)  -> iterator of (label, raw_bytes)      (network)
   parse(raw_bytes)      -> list[record dict]                   (pure)
-Raw pages are cached under raw/ exactly like OAI pages, so `dot-lit reindex` works here
+Raw pages are cached under raw/ exactly like OAI pages, so `transport-lit reindex` works here
 too.  Records use the same shape `dc.parse_record` produces; ids are `openalex:W…`,
 `cinii:<crid>`, `pubmed:<pmid>`.
 """
@@ -92,7 +92,7 @@ OPENALEX_TOPICS = {  # verified 2026-08-26 via /topics?search=…
     "T11622": "Maritime Navigation and Safety",
     "T11489": "Air Traffic Management and Optimization",
 }
-OPENALEX_TYPES = os.environ.get("DOT_LIT_OPENALEX_TYPES", "report")  # e.g. "report|dissertation"
+OPENALEX_TYPES = os.environ.get("TRANSPORT_LIT_OPENALEX_TYPES", "report")  # e.g. "report|dissertation"
 _OA_SELECT = ("id,doi,title,display_name,publication_year,type,language,authorships,primary_location,"
               "best_oa_location,abstract_inverted_index,topics,keywords,updated_date")
 
@@ -106,7 +106,7 @@ def openalex_pages(client: Client, since: str | None, say: Callable[[str], None]
     n = 0
     while cursor:
         params = {"filter": flt, "per-page": 200, "cursor": cursor, "select": _OA_SELECT,
-                  "mailto": config.CONTACT_EMAIL or "dot-lit@example.invalid"}
+                  "mailto": config.CONTACT_EMAIL or "transport-lit@example.invalid"}
         raw = _get(client, limiter, "https://api.openalex.org/works", params)
         d = json.loads(raw)
         if n == 0:
@@ -157,17 +157,17 @@ CINII_QUERIES = [
     "高齢者 運転", "運転者", "都市交通", "交通政策", "鉄道 安全", "交通 負傷", "traffic safety", "road safety",
     "pedestrian", "transportation planning", "public transport Japan",
 ]
-CINII_MAX_PER_QUERY = int(os.environ.get("DOT_LIT_CINII_MAX", "10000"))
+CINII_MAX_PER_QUERY = int(os.environ.get("TRANSPORT_LIT_CINII_MAX", "10000"))
 
 
 CINII_REGISTER_URL = "https://support.nii.ac.jp/en/cinii/api/developer"
 
 
 def cinii_pages(client: Client, since: str | None, say: Callable[[str], None]) -> Iterator[tuple[str, bytes]]:
-    appid = os.environ.get("DOT_LIT_CINII_APPID", "").strip()
+    appid = os.environ.get("TRANSPORT_LIT_CINII_APPID", "").strip()
     if not appid:
         raise RuntimeError("CiNii's API terms require an application ID: register (free) at "
-                           f"{CINII_REGISTER_URL} and set DOT_LIT_CINII_APPID")
+                           f"{CINII_REGISTER_URL} and set TRANSPORT_LIT_CINII_APPID")
     limiter = RateLimiter(1.0)
     page = 0
     for q in CINII_QUERIES:
@@ -226,7 +226,7 @@ PUBMED_JOURNALS = ["Accid Anal Prev", "Traffic Inj Prev", "J Safety Res", "Inj P
 
 
 def pubmed_term() -> str:
-    override = os.environ.get("DOT_LIT_PUBMED_TERM")
+    override = os.environ.get("TRANSPORT_LIT_PUBMED_TERM")
     if override:
         return override
     mesh = " OR ".join(f"({m})" for m in PUBMED_MESH)
@@ -334,8 +334,8 @@ API_SOURCES: dict[str, ApiSource] = {
                           notes=f"type={OPENALEX_TYPES}; topics: " + ", ".join(list(OPENALEX_TOPICS.values())[:3]) + ", …"),
     "cinii": ApiSource("cinii", "CiNii Research — Japanese articles, theses, IRDB repository items", "CiNii Research (Japan)",
                        cinii_pages, cinii_parse, country="JP",
-                       notes=f"{len(CINII_QUERIES)} ja/en queries, {CINII_MAX_PER_QUERY} max each; needs DOT_LIT_CINII_APPID (register at {CINII_REGISTER_URL})"),
+                       notes=f"{len(CINII_QUERIES)} ja/en queries, {CINII_MAX_PER_QUERY} max each; needs TRANSPORT_LIT_CINII_APPID (register at {CINII_REGISTER_URL})"),
     "pubmed": ApiSource("pubmed", "PubMed — transport/injury subset (MeSH strategy + journal list)", "PubMed transport subset",
-                        pubmed_pages, pubmed_parse, country="INT", notes="E-utilities; NCBI_API_KEY optional; DOT_LIT_PUBMED_TERM overrides",
+                        pubmed_pages, pubmed_parse, country="INT", notes="E-utilities; NCBI_API_KEY optional; TRANSPORT_LIT_PUBMED_TERM overrides",
                         raw_ext="xml"),
 }

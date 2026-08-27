@@ -1,6 +1,6 @@
 """FastMCP server exposing the local ROSA-P index.
 
-Run with ``dot-lit-mcp`` (stdio).  All tools are read-only against the local SQLite
+Run with ``transport-lit-mcp`` (stdio).  All tools are read-only against the local SQLite
 store except ``get_fulltext``, which may fetch one PDF from ROSA-P on a cache miss.
 """
 
@@ -27,7 +27,7 @@ from .store import Store, normalize_id
 log = logging.getLogger(__name__)
 
 mcp = FastMCP(
-    "dot-lit",
+    "transport-lit",
     instructions=(
         "Searchable local index of transportation grey literature. Sources (id prefix): "
         "ROSA-P / U.S. DOT National Transportation Library (dot:), VTI Sweden (vti:), BASt Germany (bast:), "
@@ -101,7 +101,7 @@ def search_reports(
         limit: Max hits (1-100). offset: for paging.
         mode: "hybrid" (default: keyword BM25 fused with semantic vectors when an embedding
             index exists), "keyword", or "semantic" (meaning-based, cross-language; needs
-            `dot-lit embed` to have run). ``mode_used`` in the result says what actually ran.
+            `transport-lit embed` to have run). ``mode_used`` in the result says what actually ran.
     Returns ranked hits; ``match_mode`` says whether all query terms matched (all_terms),
     the hit came from the any-term fallback, or from the semantic index.
     """
@@ -187,7 +187,7 @@ def harvest_status() -> dict[str, Any]:
 
 @mcp.tool(annotations=RO)
 def lookup(identifier: str) -> dict[str, Any]:
-    """Exact lookup by DOI, PMID, report number (e.g. "DOT HS 813 097"), dot-lit id, or
+    """Exact lookup by DOI, PMID, report number (e.g. "DOT HS 813 097"), transport-lit id, or
     landing URL. Use this instead of search when you already have an identifier."""
     recs = store().lookup(identifier)
     return {"identifier": identifier, "n": len(recs), "records": [_hit(r) for r in recs]}
@@ -202,7 +202,7 @@ def find_similar(id: str, limit: int = 10) -> dict[str, Any]:
 
 @mcp.tool(annotations=RO)
 def export_citations(ids: list[str], format: str = "ris") -> dict[str, Any]:
-    """Export records as RIS (Zotero/EndNote/Mendeley) or BibTeX. Pass dot-lit ids."""
+    """Export records as RIS (Zotero/EndNote/Mendeley) or BibTeX. Pass transport-lit ids."""
     recs = [r for r in (store().get_record(i) for i in ids[:200]) if r]
     fmt = (format or "ris").lower()
     text = to_bibtex(recs) if fmt in ("bib", "bibtex") else to_ris(recs)
@@ -240,7 +240,7 @@ def literature_scan(topic: str) -> str:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="dot-lit-mcp", description="dot-lit MCP server")
+    ap = argparse.ArgumentParser(prog="transport-lit-mcp", description="transport-lit MCP server")
     ap.add_argument("--transport", choices=["stdio", "streamable-http", "sse"], default="stdio")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)

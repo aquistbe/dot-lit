@@ -1,6 +1,6 @@
 import xml.etree.ElementTree as ET
 
-from dot_lit.dc import parse_record, local_id_from_oai
+from transport_lit.dc import parse_record, local_id_from_oai
 
 SAMPLE = """<record xmlns="http://www.openarchives.org/OAI/2.0/">
 <header><identifier>oai:dot.stacks:dot:93144</identifier><datestamp>2026-08-25T17:13:17Z</datestamp></header>
@@ -106,7 +106,7 @@ def test_parse_dspace_record_for_other_source():
 
 
 def test_transport_filter():
-    from dot_lit.sources import SOURCES, matches_filter
+    from transport_lit.sources import SOURCES, matches_filter
     wb = SOURCES["wbokr"]
     assert matches_filter(wb, {"title": "Seguridad vial en ciudades", "subjects": [], "abstract": ""})
     assert not matches_filter(wb, {"title": "Growth", "subjects": ["Roads", "Traffic"], "abstract": ""})  # WB: title only
@@ -128,7 +128,7 @@ def test_fedora_system_objects_are_skipped():
 
 
 def test_granularity_formatting():
-    from dot_lit.harvest import _fmt_for
+    from transport_lit.harvest import _fmt_for
     assert _fmt_for("2026-08-27T01:12:19Z", "YYYY-MM-DD") == "2026-08-27"
     assert _fmt_for("2026-08-27T01:12:19Z", "YYYY-MM-DDThh:mm:ssZ") == "2026-08-27T01:12:19Z"
     assert _fmt_for(None, "YYYY-MM-DD") is None
