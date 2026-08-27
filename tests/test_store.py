@@ -69,3 +69,12 @@ def test_fulltext_fts(tmp_path):
     hits = s.search_fulltext("negligent operator")
     assert hits and hits[0]["record_id"] == "dot:1" and "[negligent]" in hits[0]["snippet"]
     s.close()
+
+
+def test_cjk_substring_fallback(tmp_path):
+    s = Store(tmp_path / "t.sqlite")
+    s.upsert_records([{**_rec(1, "交通事故死者数の推移", "", 2010), "id": "cinii:1"},
+                      {**_rec(2, "Road safety", "", 2010), "id": "cinii:2"}])
+    hits = s.search("交通事故")
+    assert [h["id"] for h in hits] == ["cinii:1"] and hits[0]["match_mode"] == "cjk_substring"
+    s.close()

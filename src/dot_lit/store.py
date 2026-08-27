@@ -257,6 +257,20 @@ class Store:
         filters, params = self._filters(year_min, year_max, collection, doc_type, sources)
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
+        if _CJK.search(query):
+            # FTS5's unicode61 tokenizer does not segment Chinese/Japanese/Korean, so a
+            # compound like 交通事故 only matches when it stands alone.  Fall back to substring
+            # matching over title/abstract/subjects for CJK queries (index scan; fine at 1e5 rows).
+            words = [w for w in re.split(r"\s+", query.strip()) if w]
+            like = " AND ".join("(r.title LIKE ? OR r.abstract LIKE ? OR r.subjects LIKE ?)" for _ in words)
+            lp = [f"%{w}%" for w in words for _ in range(3)]
+            sql = f"SELECT r.*, '' AS snippet, 0.0 AS score FROM records r WHERE {like} {filters} ORDER BY r.year DESC LIMIT ? OFFSET ?"
+            for row in self.conn.execute(sql, [*lp, *params, limit, offset]):
+                d = self._row_to_record(row)
+                d["match_mode"] = "cjk_substring"
+                d["snippet"] = (d.get("abstract") or "")[:300]
+                results.append(d)
+            return results
 
         def run(match: str, mode: str, remaining: int) -> None:
             sql = f"""
@@ -527,6 +541,7 @@ def normalize_id(record_id: str) -> str:
 
 
 _PHRASE_RE = re.compile(r'"([^"]+)"|(\S+)')
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
 def tokenize_query(q: str) -> list[str]:

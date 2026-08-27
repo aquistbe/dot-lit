@@ -16,8 +16,8 @@ continents plus whatever you export from TRID:
 | `ipea` | IPEA (Brazil) | 207 | filtered subset of 14,400; pt; precision ~16/20 |
 | `cepal` | CEPAL/ECLAC (Latin America) | 1,165 | filtered subset of 52,199; es/en; precision ~15/20 |
 | `openalex` | OpenAlex — works typed *report* in 10 transport topics (global) | 11,448 | topics: Traffic and Road Safety, Urban Transport and Accessibility, Transportation Planning, … |
-| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | see `harvest_status` | 20 ja/en queries, 10k cap each; ja |
-| `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | see `harvest_status` | ~105k; `DOT_LIT_PUBMED_TERM` overrides the strategy |
+| `cinii` | CiNii Research (Japan) — articles, theses, IRDB repository items | 118,609 | 20 ja/en queries, 10k cap each; 59k with abstracts; CJK queries use substring matching |
+| `pubmed` | PubMed — transport/injury subset (MeSH strategy + 12 journals) | 105,028 | date-sliced E-utilities harvest; `DOT_LIT_PUBMED_TERM` overrides the strategy |
 | `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
 
 `dot-lit sources` lists them; `dot-lit harvest --source <key>|all` harvests them; the
@@ -256,6 +256,12 @@ PDF links are not in the metadata; `get_fulltext` reads `citation_pdf_url` from 
 page and falls back to the datastream convention `/view/dot/{n}/dot_{n}_DS1.pdf`.
 
 ## Verification (2026-08-26)
+
+**v0.3.0 API sources.** OpenAlex: 58 pages, 11,448 reports (10 topics, `type:report`),
+1,428 with PDF links. CiNii: 730 pages, 144,348 hits over 20 queries, 118,609 unique. PubMed:
+105,028 articles in 17 date slices (E-utilities caps `retstart` at 10,000, so slices are
+found recursively). Open-model check: Ollama `qwen2.5:3b` answered a driver-improvement
+question with one correct `search_reports` call.
 
 **v0.2.0 multi-source harvest.** VTI: 120 pages, 11,944 seen, 11,460 unique (DiVA serves
 some records in several sets), 0 resumptions. BASt: 30 pages, 2,987 seen, 2,970 unique;
