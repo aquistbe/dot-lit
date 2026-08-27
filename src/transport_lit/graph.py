@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import unicodedata
 from collections.abc import Callable
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 OPENALEX = "https://api.openalex.org"
 STALE_DAYS = 90
 MAX_CITING = 2000
-_limiter = RateLimiter(0.2)
+_limiter = RateLimiter(float(os.environ.get("TRANSPORT_LIT_OPENALEX_INTERVAL", "0.25")))
 _client: httpx.Client | None = None
 
 FetchFn = Callable[[str, dict[str, Any] | None], dict[str, Any] | None]
@@ -47,7 +48,8 @@ def _http_fetch(path: str, params: dict[str, Any] | None = None) -> dict[str, An
             return None
         if r.status_code in (429, 500, 502, 503, 504):
             import time
-            time.sleep(2.0 * (attempt + 1))
+            # 429 = we are over OpenAlex's rate limit: back off hard (15/30/45 s); 5xx: short waits
+            time.sleep((15.0 if r.status_code == 429 else 2.0) * (attempt + 1))
             continue
         r.raise_for_status()
         return r.json()
