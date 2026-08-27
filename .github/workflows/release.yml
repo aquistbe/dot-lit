@@ -14,19 +14,11 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv build
-      - uses: actions/upload-artifact@v4
-        with: { name: dist, path: dist/ }
       - name: Create GitHub release with wheel + sdist
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
   publish:
-    # A release created with GITHUB_TOKEN does not fire `release:` events, so PyPI publishing
-    # runs here, after the build, gated by the `pypi` environment's required reviewer.
     needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: dist/ }
-      - uses: pypa/gh-action-pypi-publish@release/v1
+    uses: ./.github/workflows/publish.yml
+    secrets: inherit
