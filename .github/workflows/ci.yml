@@ -18,3 +18,4 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv run dot-lit --version
+      - run: uv build && uv pip install twine && uv run twine check dist/*
