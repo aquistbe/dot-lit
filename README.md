@@ -2,10 +2,25 @@
 
 `dot-lit` gives an AI assistant (Claude Desktop, Claude Code, any MCP client) keyword
 search over the transportation research reports that PubMed does not index and Semantic
-Scholar covers poorly: NHTSA's *DOT HS* technical report series, FHWA/FRA/FTA/FAA
-research reports, University Transportation Center reports, and state DOT evaluations, as
-held by **ROSA-P**, the National Transportation Library's repository
-(<https://rosap.ntl.bts.gov>).
+Scholar covers poorly. It started with **ROSA-P**, the U.S. National Transportation
+Library's repository (NHTSA *DOT HS* reports, FHWA/FRA/FTA/FAA, UTC and state DOT
+research; <https://rosap.ntl.bts.gov>), and now harvests six OAI-PMH sources on three
+continents plus whatever you export from TRID:
+
+| key | source | records | notes |
+|-----|--------|--------:|-------|
+| `dot` | ROSA-P — U.S. DOT National Transportation Library | 90,599 | full repository |
+| `vti` | VTI — Swedish National Road and Transport Research Institute (DiVA) | 11,460 | reports, conference papers, articles; en/sv |
+| `bast` | BASt — German Federal Highway Research Institute (OPUS) | 2,970 | 1,901 with direct PDF links; de/en |
+| `wbokr` | World Bank Open Knowledge Repository | see `harvest_status` | transport-filtered subset of ~40k |
+| `ipea` | IPEA (Brazil) | see `harvest_status` | transport-filtered subset of ~14k; pt |
+| `cepal` | CEPAL/ECLAC (Latin America) | see `harvest_status` | transport-filtered subset of ~52k; es/en/pt |
+| `trid` | TRID exports you import (`dot-lit import`) | yours | see below |
+
+`dot-lit sources` lists them; `dot-lit harvest --source <key>|all` harvests them; the
+`collection` filter in `search_reports` selects one (e.g. `"VTI"`, `"BASt"`, `"World Bank"`,
+`"CEPAL"`, `"TRID"`). Adding another OAI-PMH repository is one entry in
+`src/dot_lit/sources.py`.
 
 > I created this for my own personal academic and research use and am happy to share it
 > with anyone else who finds it useful. I welcome feedback on errors, integration needs,
@@ -100,7 +115,8 @@ uv tool upgrade dot-lit          # later, to move to whatever main points at
 ## Harvesting
 
 ```bash
-dot-lit harvest                     # auto: incremental if a complete full harvest exists, else full
+dot-lit harvest                     # ROSA-P; auto: incremental if a complete full harvest exists, else full
+dot-lit harvest --source all        # every configured source (vti, bast, wbokr, ipea, cepal, rosap)
 dot-lit harvest --mode full         # walk the whole repository again
 dot-lit harvest --mode incremental  # from = start of last complete run − 1 h, until = now
 dot-lit harvest --from 2026-08-01T00:00:00Z   # explicit window (full timestamp required)
@@ -133,8 +149,12 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
 * **Caching:** every OAI page is stored gzipped under `raw/run<N>-p<page>.xml.gz`, so the
   parser can be changed and the index rebuilt without touching the network; PDFs and their
   extracted text are cached under `pdf/` and in the `fulltext` table.
-* `from`/`until` must be full `YYYY-MM-DDThh:mm:ssZ` timestamps (a bare date is a
-  `badArgument`).
+* `from`/`until` are formatted to each repository's declared `granularity` (read from
+  `Identify`): ROSA-P, DiVA and DSpace take full `YYYY-MM-DDThh:mm:ssZ` timestamps, OPUS
+  (BASt) takes only `YYYY-MM-DD` and the window is widened a day each side.
+* Broad repositories (World Bank, IPEA, CEPAL) are filtered at harvest time by a
+  multilingual transport regex (`sources.TRANSPORT_RE`, en/es/pt/de/fr/sv) over title,
+  subjects and abstract; the run notes record how many were kept vs skipped.
 
 ### Monthly rebuild and weekly updates (maintenance schedule)
 
@@ -146,7 +166,7 @@ exports) are untouched, and a failed rebuild changes nothing.
 
 ```bash
 dot-lit install-schedule          # shows the two launchd agents
-dot-lit install-schedule --write  # installs them: Mon 06:00 incremental, 1st of month 05:00 --fresh
+dot-lit install-schedule --write  # installs them: Mon 06:00 `--source all` incremental, 1st 05:00 `--source all --fresh`
 ```
 
 Logs land in `$DOT_LIT_DATA_DIR/logs/`. On Linux use the cron lines the command prints.
@@ -329,9 +349,10 @@ not be used to train LLMs. It is deliberately not scraped here.
 
 ### v2 order (agreed 2026-08-26)
 
-1. VTI + BASt (OAI-PMH drop-ins) — 2. World Bank OKR, IPEA, CEPAL (OAI, subject-filtered) —
+1. ~~VTI + BASt~~ (done, v0.2) — 2. ~~World Bank OKR, IPEA, CEPAL~~ (done, v0.2) —
 3. IRDB Japan — 4. OpenAlex `type:report` as global backstop — 5. a **PubMed transport
-subset** (see below).
+subset** (see below). VTI note: DiVA's `oai_dc` carries no full-text link; switching that
+source to `swepub_mods`/`mets_kb` would give `get_fulltext` the `FULLTEXT01.pdf` URL.
 
 ### PubMed: a transport/injury subset, not all of PubMed
 

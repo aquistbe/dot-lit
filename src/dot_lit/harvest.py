@@ -199,9 +199,13 @@ def harvest(
                 continue
 
             # ---- cursor cross-check (only meaningful on a single uninterrupted list) ----
-            # DiVA reports the cursor *after* the page; others report the page start.
-            if page.cursor is not None and resumptions == 0 and page.cursor not in (seen, seen + len(page.records)):
-                notes.append(f"cursor mismatch on page {pages}: server cursor={page.cursor}, local count={seen}")
+            # Cursor semantics differ: ROSA-P/OPUS = record offset of the page start, DiVA =
+            # offset after the page, DSpace = page index.  Note the first inconsistency only;
+            # completeness is established by the token-less last page, not by the cursor.
+            if (page.cursor is not None and resumptions == 0 and pages > 0
+                    and page.cursor not in (seen, seen + len(page.records), pages)
+                    and not any(n.startswith("cursor mismatch") for n in notes)):
+                notes.append(f"cursor mismatch on page {pages}: server cursor={page.cursor}, local count={seen} (informational)")
 
             parsed = []
             page_max: str | None = None

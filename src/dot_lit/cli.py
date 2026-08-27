@@ -201,8 +201,8 @@ def cmd_install_schedule(a: argparse.Namespace) -> int:
     """macOS launchd: weekly incremental harvest (Mon 06:00) + monthly fresh rebuild (1st, 05:00)."""
     if sys.platform != "darwin":
         print("install-schedule writes launchd agents (macOS). On Linux use cron, e.g.:\n"
-              "  0 6 * * 1   dot-lit harvest --mode incremental >> ~/.local/share/dot-lit/logs/weekly.log 2>&1\n"
-              "  0 5 1 * *   dot-lit harvest --fresh            >> ~/.local/share/dot-lit/logs/monthly.log 2>&1",
+              "  0 6 * * 1   dot-lit harvest --source all --mode incremental >> ~/.local/share/dot-lit/logs/weekly.log 2>&1\n"
+              "  0 5 1 * *   dot-lit harvest --source all --fresh            >> ~/.local/share/dot-lit/logs/monthly.log 2>&1",
               file=sys.stderr)
         return 1
     exe = shutil.which("dot-lit") or str(Path(sys.argv[0]).resolve())
@@ -211,8 +211,8 @@ def cmd_install_schedule(a: argparse.Namespace) -> int:
     if config.CONTACT_EMAIL:
         env["DOT_LIT_CONTACT"] = config.CONTACT_EMAIL
     jobs = {
-        "org.dot-lit.harvest-weekly": (["harvest", "--mode", "incremental"], {"Weekday": 1, "Hour": 6, "Minute": 0}),
-        "org.dot-lit.harvest-monthly": (["harvest", "--fresh"], {"Day": 1, "Hour": 5, "Minute": 0}),
+        "org.dot-lit.harvest-weekly": (["harvest", "--source", "all", "--mode", "incremental"], {"Weekday": 1, "Hour": 6, "Minute": 0}),
+        "org.dot-lit.harvest-monthly": (["harvest", "--source", "all", "--fresh"], {"Day": 1, "Hour": 5, "Minute": 0}),
     }
     agents = Path("~/Library/LaunchAgents").expanduser()
     written = []
