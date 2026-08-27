@@ -137,7 +137,10 @@ records with no resumption token — the OAI-PMH definition of a complete list. 
 unique records are in the store; the 103-record gap is the same record appearing on two
 pages, which happens because ROSA-P does not return records in a stable order (the
 harvester logs this: "datestamp ordering violated on page 2"). A second independent full
-pass was run into a separate directory to compare ID sets — see below.
+pass, 30 minutes later into a separate directory, returned exactly the same numbers —
+908 pages, 90,706 seen, 90,603 unique — and the two ID sets are identical (0 records
+unique to either pass). The 103 repeats are the repository serving the same record on
+two pages, not records being skipped.
 
 **Coverage by decade** (year present for 74,448 = 82 %; the remaining 16,155 have no date
 in any metadata field; `year_source` says whether a year came from `dc:date` (48,658), a
