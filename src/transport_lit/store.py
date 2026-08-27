@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS records (
 );
 CREATE INDEX IF NOT EXISTS idx_records_year ON records(year);
 CREATE INDEX IF NOT EXISTS idx_records_datestamp ON records(datestamp);
+CREATE INDEX IF NOT EXISTS idx_records_doi_lower ON records(lower(doi));
 
 CREATE TABLE IF NOT EXISTS record_collections (
     record_id  TEXT NOT NULL,

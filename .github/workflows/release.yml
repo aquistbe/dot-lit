@@ -14,11 +14,20 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
       - run: uv build
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/ }
       - name: Create GitHub release with wheel + sdist
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
   publish:
+    # PyPI trusted publishing must be registered for THIS file (release.yml) as well as
+    # publish.yml (manual dispatch): PyPI matches the top-level workflow, so a reusable
+    # workflow does not inherit the caller's registration.
     needs: build
-    uses: ./.github/workflows/publish.yml
-    secrets: inherit
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1
