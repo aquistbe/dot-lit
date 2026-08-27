@@ -62,6 +62,19 @@ def _norm_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
 
 
+def _titles_match(a: str, b: str) -> bool:
+    """Exact normalised match, or one title a prefix of the other (edition/subtitle tails),
+    or Jaccard token similarity >= 0.85 for titles of at least four words."""
+    if not a or not b:
+        return False
+    if a == b or a.startswith(b) or b.startswith(a):
+        return True
+    ta, tb = set(a.split()), set(b.split())
+    if min(len(ta), len(tb)) < 4:
+        return False
+    return len(ta & tb) / len(ta | tb) >= 0.85
+
+
 def _wid(url_or_id: str) -> str:
     return (url_or_id or "").rsplit("/", 1)[-1]
 
@@ -153,8 +166,10 @@ class Graph:
             res = fetch("/works", {"filter": f"title.search:{_search_safe(rec['title'])}", "per-page": 5})
             want = _norm_title(rec["title"])
             for cand in (res or {}).get("results", []):
-                if _norm_title(cand.get("display_name") or "") == want and (
-                        not rec.get("year") or not cand.get("publication_year") or abs(cand["publication_year"] - rec["year"]) <= 1):
+                have = _norm_title(cand.get("display_name") or "")
+                year_ok = (not rec.get("year") or not cand.get("publication_year")
+                           or abs(cand["publication_year"] - rec["year"]) <= 1)
+                if year_ok and _titles_match(want, have):
                     w, match = cand, "title"
                     break
         if w is None:

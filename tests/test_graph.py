@@ -53,3 +53,12 @@ def test_graph_resolution_edges_and_index_mapping(tmp_path, monkeypatch):
     assert g.cited_by_counts(["dot:1", "dot:2"]) == {"dot:1": 2, "dot:2": 5}
     st = g.stats(); assert st["edges"] == 3 and st["works_in_index"] == 4
     s.close()
+
+
+def test_titles_match():
+    from transport_lit.graph import _titles_match, _norm_title
+    a = _norm_title("Countermeasures That Work: A Highway Safety Countermeasure Guide for State Highway Safety Offices, 11th Edition, 2023")
+    b = _norm_title("Countermeasures That Work: A Highway Safety Countermeasure Guide For State Highway Safety Offices, Eleventh Edition")
+    assert _titles_match(a, b)
+    assert not _titles_match(_norm_title("Road safety"), _norm_title("Road safety in Peru"))  # too short to trust
+    assert not _titles_match(_norm_title("Evaluation of the Oregon DMV driver improvement program"), _norm_title("Evaluation of the Iowa driver improvement program by gender"))
