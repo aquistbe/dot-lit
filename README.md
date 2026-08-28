@@ -512,11 +512,13 @@ Verified 2026-08-27: the Oregon DMV DIP evaluation (`dot:21848`, no DOI, no date
 resolved by title and lists 6 citing works, among them Iowa's DIP evaluation and the NJ
 recidivism study; Lynn's 1982 Virginia 24-month report is cited by the 2003 Cochrane
 review of post-licence driver education (`pubmed:12917984`, in the index); a 2020 Seoul
-elderly-pedestrian paper has 57 references, 19 in the index. OpenAlex resolves NTL's
-`10.21949/…` DOIs (15,493 ROSA-P records carry one); records without any DOI — 73,000 of
-ROSA-P's 90,599 — depend on the title match, which accepts an exact normalised title, a
+elderly-pedestrian paper has 57 references, 19 in the index. OpenAlex's coverage of NTL's
+`10.21949/…` DOIs is thin: a bulk pass resolved 4,257 of the 15,493 ROSA-P records that
+carry one, and a random sample of the remainder found 1 in 50 known to OpenAlex. So most
+ROSA-P reports — DOI or not — depend on the title match, which accepts an exact normalised title, a
 prefix relation (edition or subtitle tails), or ≥ 0.8 token overlap, always with the year
-within ±1. Grey literature that nobody has cited in indexed venues will still show zero;
+within ±1; when several OpenAlex entries fit (it holds duplicates of many reports), the
+most-cited one is taken as canonical. Grey literature that nobody has cited in indexed venues will still show zero;
 that is a property of the citation data, not of the index. OpenCitations and Semantic
 Scholar could be added as fallbacks in the same tables.
 

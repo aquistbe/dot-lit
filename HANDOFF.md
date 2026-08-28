@@ -32,8 +32,12 @@ fails ("agent returned an error"), ask him to unlock 1Password and retry.
 342,727 records: ROSA-P (dot) 90,599 · CiNii 118,609+ · PubMed 105,028 · VTI 11,460 ·
 OpenAlex reports 11,448 · BASt 2,970 · CEPAL 1,165 · World Bank 976 · IPEA 207.
 Vectors: 342,462 (fastembed `paraphrase-multilingual-MiniLM-L12-v2`, 384-d); the active
-set is recorded in `meta.embeddings.active`. Citation graph: `cite prefetch` in progress
-(last log line: `doi:26050/117262queried,23977resolvedsofar`); a second pass is needed for batches skipped on 429s.
+set is recorded in `meta.embeddings.active`. Citation graph (2026-08-28): 165,333 works, 148,614 linked to index records (PubMed 103,729
+of 105,028; OpenAlex 11,447; CiNii 28,192; ROSA-P 4,257 of 15,493 NTL-DOI records — OpenAlex
+covers `10.21949` thinly, ~1 in 50 of the rest; World Bank 885; BASt 59; IPEA 37), 19,705
+reference edges (ROSA-P works only: `cite prefetch --edges --source dot`; 194 works failed on
+429s and can be re-run). Citing lists are on demand. PubMed edges not yet fetched
+(`cite prefetch --edges --source pubmed`, ~104k requests, run overnight if wanted).
 Public snapshot (v0.4.0 release asset, 989 MB): 223,853 records + vectors, excludes CiNii
 and TRID. Rebuild with `transport-lit snapshot build <file>` then `gh release upload`.
 
@@ -66,8 +70,8 @@ release, dispatches publish.yml; **Alex must approve** the `pypi` environment ru
 
 ## Open items / where to pick up
 
-1. Finish citation prefetch second pass (`transport-lit cite prefetch`, skips resolved records)
-   and report `harvest_status().citation_graph`.
+1. Optional: `cite prefetch --edges --source dot` again (194 works failed on 429s), then
+   `--source pubmed` overnight for the journal side of the graph.
 2. Refresh the public snapshot after the first monthly rebuild (v0.4.0 asset is from 2026-08-26).
 3. First launchd runs: weekly Mon 2026-08-31 06:00, monthly 2026-09-01 05:00 — check
    `~/.local/share/transport-lit/logs/` and `transport-lit doctor` afterwards.

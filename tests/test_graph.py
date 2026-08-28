@@ -62,3 +62,11 @@ def test_titles_match():
     assert _titles_match(a, b)
     assert not _titles_match(_norm_title("Road safety"), _norm_title("Road safety in Peru"))  # too short to trust
     assert not _titles_match(_norm_title("Evaluation of the Oregon DMV driver improvement program"), _norm_title("Evaluation of the Iowa driver improvement program by gender"))
+
+
+def test_title_variants():
+    from transport_lit.graph import _title_variants
+    v = _title_variants("Countermeasures That Work: A Highway Safety Countermeasure Guide for State Highway Safety Offices [Second Edition, 2007]")
+    assert v[1] == "Countermeasures That Work: A Highway Safety Countermeasure Guide for State Highway Safety Offices"
+    assert len(v) == 3 and v[2].split()[:3] == ["Countermeasures", "That", "Work:"]
+    assert _title_variants("Short title") == ["Short title"]

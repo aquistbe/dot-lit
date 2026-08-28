@@ -64,6 +64,20 @@ def _norm_title(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
 
 
+def _title_variants(title: str) -> list[str]:
+    """Search strings to try, most specific first: the full title; the title without
+    bracketed/parenthesised tails such as "[Second Edition, 2007]" (OpenAlex's title.search
+    requires every word, so edition tails hide the canonical entry); the first 12 words."""
+    out = [title]
+    stripped = re.sub(r"\s*[\[(][^\])]*[\])]", "", title).strip(" .,:;")
+    if stripped and stripped != title:
+        out.append(stripped)
+    words = stripped.split() if stripped else title.split()
+    if len(words) > 12:
+        out.append(" ".join(words[:12]))
+    return out
+
+
 def _titles_match(a: str, b: str) -> bool:
     """Exact normalised match, or one title a prefix of the other (edition/subtitle tails),
     or Jaccard token similarity >= 0.8 for titles of at least four words."""
@@ -167,15 +181,25 @@ class Graph:
         if w is None and rid.startswith("pubmed:"):
             w, match = fetch(f"/works/pmid:{rid.split(':', 1)[1]}"), "pmid"
         if w is None and rec.get("title"):
-            res = fetch("/works", {"filter": f"title.search:{_search_safe(rec['title'])}", "per-page": 5})
             want = _norm_title(rec["title"])
-            for cand in (res or {}).get("results", []):
-                have = _norm_title(cand.get("display_name") or "")
-                year_ok = (not rec.get("year") or not cand.get("publication_year")
-                           or abs(cand["publication_year"] - rec["year"]) <= 1)
-                if year_ok and _titles_match(want, have):
-                    w, match = cand, "title"
+            fits: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            for variant in _title_variants(rec["title"]):
+                res = fetch("/works", {"filter": f"title.search:{_search_safe(variant)}", "per-page": 10})
+                for cand in (res or {}).get("results", []):
+                    if cand["id"] in seen_ids:
+                        continue
+                    seen_ids.add(cand["id"])
+                    have = _norm_title(cand.get("display_name") or "")
+                    year_ok = (not rec.get("year") or not cand.get("publication_year")
+                               or abs(cand["publication_year"] - rec["year"]) <= 1)
+                    if year_ok and _titles_match(want, have):
+                        fits.append(cand)
+                if fits and variant != rec["title"]:
                     break
+            if fits:
+                # OpenAlex holds duplicates of many reports; the most-cited entry is the canonical one
+                w, match = max(fits, key=lambda x: x.get("cited_by_count") or 0), "title"
         if w is None:
             c.execute("INSERT INTO unresolved(record_id, tried_at) VALUES (?, ?) ON CONFLICT(record_id) DO UPDATE SET tried_at=excluded.tried_at",
                       (rid, utcnow()))
