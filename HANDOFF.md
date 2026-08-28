@@ -1,6 +1,6 @@
 # HANDOFF — transport-lit: current state and where to pick up
 
-Last updated 2026-08-27 (session with Claude Code). Read this before touching anything.
+Last updated 2026-08-28T21:25Z (end of the 2026-08-26/28 session with Claude Code). Read this before touching anything.
 The README is the user-facing reference; this file is the operator's view.
 
 ## What it is
@@ -70,11 +70,14 @@ release, dispatches publish.yml; **Alex must approve** the `pypi` environment ru
 
 ## Open items / where to pick up
 
-1. PubMed reference-edge fetch STARTED 2026-08-28 (~103,734 works, 0.9 s/request ≈ 26 h,
-   `nice -n 15`; script and logs in the session scratchpad `edges_pubmed.sh`, `edges-pubmed.log`).
-   If it was interrupted: re-run `TRANSPORT_LIT_OPENALEX_INTERVAL=0.9 transport-lit cite prefetch --edges --source pubmed`
-   — it skips works whose references are already fetched. Then optionally `--source dot` again
-   (194 ROSA-P works failed on 429s).
+1. PubMed reference-edge fetch IN PROGRESS at logoff (2026-08-28T21:25Z): 28800/103734works,957871edgessofar, failed=0;
+   graph then: edges: 977744 | works: 574489 | pubmed refs fetched: 28801. It runs detached (`nice -n 15`, 0.9 s/request, ~0.3% CPU) from the
+   session scratchpad script `edges_pubmed.sh`; it survives the Claude session ending but
+   not a reboot/logout of the Mac. To check: `transport-lit harvest_status` → `citation_graph`,
+   or `pgrep -f "cite prefetch --edges"`. To resume after any interruption:
+   `TRANSPORT_LIT_OPENALEX_INTERVAL=0.9 transport-lit cite prefetch --edges --source pubmed`
+   (skips works already fetched). Afterwards, optionally `--source dot` again (194 ROSA-P
+   works failed on 429s) and refresh the public snapshot.
 2. Refresh the public snapshot after the first monthly rebuild (v0.4.0 asset is from 2026-08-26).
 3. First launchd runs: weekly Mon 2026-08-31 06:00, monthly 2026-09-01 05:00 — check
    `~/.local/share/transport-lit/logs/` and `transport-lit doctor` afterwards.
