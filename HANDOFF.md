@@ -70,8 +70,11 @@ release, dispatches publish.yml; **Alex must approve** the `pypi` environment ru
 
 ## Open items / where to pick up
 
-1. Optional: `cite prefetch --edges --source dot` again (194 works failed on 429s), then
-   `--source pubmed` overnight for the journal side of the graph.
+1. PubMed reference-edge fetch STARTED 2026-08-28 (~103,734 works, 0.9 s/request ≈ 26 h,
+   `nice -n 15`; script and logs in the session scratchpad `edges_pubmed.sh`, `edges-pubmed.log`).
+   If it was interrupted: re-run `TRANSPORT_LIT_OPENALEX_INTERVAL=0.9 transport-lit cite prefetch --edges --source pubmed`
+   — it skips works whose references are already fetched. Then optionally `--source dot` again
+   (194 ROSA-P works failed on 429s).
 2. Refresh the public snapshot after the first monthly rebuild (v0.4.0 asset is from 2026-08-26).
 3. First launchd runs: weekly Mon 2026-08-31 06:00, monthly 2026-09-01 05:00 — check
    `~/.local/share/transport-lit/logs/` and `transport-lit doctor` afterwards.
