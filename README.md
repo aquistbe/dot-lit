@@ -202,13 +202,17 @@ What the harvester does and why (all behaviour verified against ROSA-P on 2026-0
   do" only when no token was in play; mid-list it is treated as truncation.
 * **Silent truncation checks:** the token's `cursor` is compared with the local count on every
   page; a full harvest that returns >5 % fewer records than the previous full harvest is
-  flagged in the run notes. Both appear in `harvest_status().last_harvest.notes`.
+  marked failed with an explanation in the run notes. `harvest_status().sources` shows
+  both the latest attempt and the last successful harvest for each source.
 * **Deletions:** the repository reports `deletedRecord=no`, so nothing is ever removed
-  locally; a record that vanishes from ROSA-P stays in the index until a full re-harvest
-  into a fresh `TRANSPORT_LIT_DATA_DIR`.
+  by incremental ROSA-P harvests. `harvest --fresh` replaces that source after a successful
+  full harvest. It refuses a replacement with more than a 5% drop in unique records;
+  investigate the source and run notes before attempting to rebuild again.
 * **Caching:** every OAI page is stored gzipped under `raw/run<N>-p<page>.xml.gz`, so the
   parser can be changed and the index rebuilt without touching the network; PDFs and their
   extracted text are cached under `pdf/` and in the `fulltext` table.
+  Fresh rebuilds reserve run numbers in the live database, so their cache files cannot
+  overwrite earlier runs. Reindexing checks for missing or corrupt pages before updating records.
 * `from`/`until` are formatted to each repository's declared `granularity` (read from
   `Identify`): ROSA-P, DiVA and DSpace take full `YYYY-MM-DDThh:mm:ssZ` timestamps, OPUS
   (BASt) takes only `YYYY-MM-DD` and the window is widened a day each side.
@@ -583,3 +587,35 @@ snapshot carries the harvest bookkeeping, so `harvest --source all` knows where 
 leave out **CiNii** (its API terms require registration and are silent on redistribution)
 and **TRID** imports (TRB's terms); users harvest those themselves. Releases carry a
 snapshot when one was built.
+
+## Reliability review (2026-09-05)
+
+See [REVIEW.md](REVIEW.md) for the local connection checks, fixes, and remaining research-use limitations.
+
+OpenAlex harvests and citation lookups accept `TRANSPORT_LIT_OPENALEX_API_KEY` (or
+`OPENALEX_API_KEY`). Put the key in `~/.config/transport-lit/env`; do not commit it.
+A free key raises the request budget. The `from_updated_date` filter requires a paid
+plan, so incremental OpenAlex harvests now refresh the entire configured report subset
+by default. Paid-plan users can set `TRANSPORT_LIT_OPENALEX_USE_UPDATED_FILTER=1` to
+request only updated works. Requests use at most 100 records per page. See OpenAlex's
+[authentication documentation](https://help.openalex.org/api/authentication/) and
+[sync-filter documentation](https://help.openalex.org/api/filtering/).
+
+PubMed incremental harvests now query modification date (`mdat`) so changes to older
+records, including later indexing, can be retrieved. Publication-date slices exceeding
+the retrieval cap fail with a message to narrow the strategy. API error envelopes fail
+the harvest rather than being counted as empty success.
+
+Search supports field qualifiers such as `title:pedestrian`, `authors:lynn`, and
+`report_numbers:"813 097"`. It remains a ranked discovery search: unquoted AND/OR/NOT
+are not a Boolean query language, and any-term matches can supplement all-term matches.
+Semantic searches apply source/year/collection filters before selecting nearest records.
+When vectors or the embedding backend are unavailable, `mode_used="keyword"` reports the
+keyword fallback, including when semantic mode was requested.
+
+PDF downloads replace the cached file only after the transfer succeeds. Snapshot
+installation validates an extracted staging copy, then uses SQLite's backup API to
+update the database while preserving SQLite's handling of active connections and WAL
+files. Snapshot builds filter excluded records out of both vectors and linked citation
+metadata. Cached PDF text is still available only for documents fetched previously;
+scanned documents require an OCR workflow outside this MCP.

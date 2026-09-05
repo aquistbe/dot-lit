@@ -40,7 +40,11 @@ def _http_fetch(path: str, params: dict[str, Any] | None = None) -> dict[str, An
     if _client is None:
         _client = httpx.Client(headers={"User-Agent": config.USER_AGENT}, timeout=config.HTTP_TIMEOUT)
     p = dict(params or {})
-    p["mailto"] = config.CONTACT_EMAIL or "transport-lit@example.invalid"
+    if config.CONTACT_EMAIL:
+        p["mailto"] = config.CONTACT_EMAIL
+    key = config._env("OPENALEX_API_KEY") or os.environ.get("OPENALEX_API_KEY", "")
+    if key:
+        p["api_key"] = key
     for attempt in range(4):
         _limiter.wait()
         r = _client.get(OPENALEX + path, params=p)
@@ -51,7 +55,8 @@ def _http_fetch(path: str, params: dict[str, Any] | None = None) -> dict[str, An
             # 429 = we are over OpenAlex's rate limit: back off hard (15/30/45 s); 5xx: short waits
             time.sleep((15.0 if r.status_code == 429 else 2.0) * (attempt + 1))
             continue
-        r.raise_for_status()
+        if r.is_error:
+            raise RuntimeError(f"OpenAlex request: HTTP {r.status_code}")
         return r.json()
     raise RuntimeError(f"OpenAlex {path}: gave up after retries ({r.status_code})")
 
@@ -60,8 +65,9 @@ fetch: FetchFn = _http_fetch  # tests replace this
 
 
 def _norm_title(t: str) -> str:
-    t = unicodedata.normalize("NFKD", t or "").encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+    t = unicodedata.normalize("NFKD", t or "")
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return re.sub(r"[^\w]+", " ", t.casefold()).strip()
 
 
 def _title_variants(title: str) -> list[str]:
@@ -217,10 +223,13 @@ class Graph:
             return {"id": normalize_id(record_id), "resolved": False, "references": []}
         c = self.s.conn
         if refresh or not w.get("refs_fetched_at"):
-            full = fetch(f"/works/{w['openalex_id']}") or {}
+            full = fetch(f"/works/{w['openalex_id']}")
+            if full is None:
+                raise RuntimeError("OpenAlex work was not found; reference cache was not updated")
             refs = [_wid(x) for x in full.get("referenced_works") or []]
-            c.executemany("INSERT OR IGNORE INTO citations(citing, cited) VALUES (?, ?)", [(w["openalex_id"], r) for r in refs])
             self._hydrate(refs)
+            c.execute("DELETE FROM citations WHERE citing=?", (w["openalex_id"],))
+            c.executemany("INSERT OR IGNORE INTO citations(citing, cited) VALUES (?, ?)", [(w["openalex_id"], r) for r in refs])
             c.execute("UPDATE works SET refs_fetched_at = ?, cited_by_count = COALESCE(?, cited_by_count) WHERE openalex_id = ?",
                       (utcnow(), full.get("cited_by_count"), w["openalex_id"]))
             c.commit()
@@ -238,13 +247,14 @@ class Graph:
         if refresh or stale:
             cursor, got, truncated = "*", 0, 0
             while cursor:
-                page = fetch("/works", {"filter": f"cites:{w['openalex_id']}", "per-page": 200, "cursor": cursor,
+                page = fetch("/works", {"filter": f"cites:{w['openalex_id']}", "per-page": 100, "cursor": cursor,
                                         "select": "id,doi,ids,display_name,publication_year,cited_by_count,type,primary_location"}) or {}
                 for cw in page.get("results", []):
                     row = _work_row(cw)
                     self._upsert_work(row)
                     c.execute("INSERT OR IGNORE INTO citations(citing, cited) VALUES (?, ?)", (row["openalex_id"], w["openalex_id"]))
                     got += 1
+                c.commit()  # release the writer before requesting another page
                 cursor = (page.get("meta") or {}).get("next_cursor")
                 if not page.get("results") or got >= MAX_CITING:
                     truncated = int(bool(cursor) and got >= MAX_CITING)
@@ -281,6 +291,7 @@ class Graph:
             for w in chunk:
                 if w not in seen:
                     c.execute("INSERT OR IGNORE INTO works(openalex_id, title) VALUES (?, '')", (w,))
+            c.commit()  # hydration may span thousands of network requests
 
     def prefetch(self, *, sources: list[str] | None = None, limit: int | None = None,
                  progress: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -350,6 +361,8 @@ class Graph:
             wid = r[0]
             try:
                 full = fetch(f"/works/{wid}", {"select": "id,referenced_works,cited_by_count"}) or {}
+                if not full:
+                    raise RuntimeError("OpenAlex work was not found")
             except Exception as exc:  # noqa: BLE001
                 failed += 1
                 say(f"  {wid} failed ({exc}); continuing")
@@ -361,8 +374,8 @@ class Graph:
                       (utcnow(), full.get("cited_by_count"), wid))
             edges += len(refs)
             done += 1
+            c.commit()  # no write transaction may span a network request or retry
             if done % 200 == 0:
-                c.commit()
                 say(f"  {done}/{len(rows)} works, {edges} edges so far")
         c.commit()
         # link any newly seen cited works to local records (by openalex id / doi / pmid) in bulk

@@ -163,7 +163,8 @@ class Store:
         for col, decl in (("year_source", "TEXT"), ("notes", "TEXT"), ("first_seen_at", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE records ADD COLUMN {col} {decl}")
-        self.conn.execute("UPDATE records SET first_seen_at = harvested_at WHERE first_seen_at IS NULL")
+        if self.conn.execute("SELECT 1 FROM records WHERE first_seen_at IS NULL LIMIT 1").fetchone():
+            self.conn.execute("UPDATE records SET first_seen_at = harvested_at WHERE first_seen_at IS NULL")
         # populate the full-text FTS index for rows that predate it
         if self.conn.execute("SELECT (SELECT COUNT(*) FROM fulltext) > (SELECT COUNT(*) FROM fulltext_fts)").fetchone()[0]:
             self.conn.execute("INSERT INTO fulltext_fts(fulltext_fts) VALUES ('rebuild')")
@@ -182,12 +183,12 @@ class Store:
         rep: dict[str, Any] = {"integrity": c.execute("PRAGMA integrity_check").fetchone()[0]}
         for fts in ("records_fts", "fulltext_fts"):
             try:
-                c.execute(f"INSERT INTO {fts}({fts}) VALUES('integrity-check')")
+                c.execute(f"INSERT INTO {fts}({fts}, rank) VALUES('integrity-check', 1)")
                 rep[fts] = "ok"
             except sqlite3.DatabaseError as exc:
                 rep[fts] = f"inconsistent: {exc}"
         rep["runs_still_running"] = [dict(r) for r in c.execute(
-            "SELECT id, source, started_at FROM harvest_runs WHERE status='running' AND started_at < datetime('now', '-6 hours')")]
+            "SELECT id, source, started_at FROM harvest_runs WHERE status='running' AND julianday(started_at) < julianday('now', '-6 hours')")]
         rep["runs_with_impossible_times"] = [dict(r) for r in c.execute(
             "SELECT id, source, started_at, finished_at FROM harvest_runs WHERE finished_at IS NOT NULL AND finished_at < started_at")]
         wal = self.path.with_name(self.path.name + "-wal")
@@ -388,6 +389,8 @@ class Store:
     def lookup(self, identifier: str) -> list[dict[str, Any]]:
         """Find records by DOI, PMID, report number, TRID/ROSA-P id or landing URL."""
         ident = identifier.strip()
+        if not ident:
+            return []
         m = re.search(r"(10\.\d{4,9}/[^\s\"<>]+)", ident)
         rows: list = []
         if m:
@@ -398,6 +401,8 @@ class Store:
             rec = self.get_record(ident)
             if rec:
                 return [rec]
+        if not rows:
+            rows = self.conn.execute("SELECT * FROM records WHERE landing_url = ? OR oai_identifier = ?", (ident, ident)).fetchall()
         if not rows:
             rows = self.conn.execute("SELECT * FROM records WHERE report_numbers LIKE ? LIMIT 20", (f"%{ident}%",)).fetchall()
         out = [self._row_to_record(r) for r in rows]
@@ -480,7 +485,7 @@ class Store:
         ).fetchall()
         return {r["src"]: r["n"] for r in rows}
 
-    def replace_source(self, prefix: str, other: "Store") -> int:
+    def replace_source(self, prefix: str, other: "Store", *, import_runs: bool = True) -> int:
         """Atomically replace every record with id prefix `prefix:` by the rows in `other`
         (a freshly harvested store).  Used by `harvest --fresh` for a true rebuild that
         drops records no longer served, without ever leaving the index empty."""
@@ -498,8 +503,9 @@ class Store:
                 self.conn.execute("UPDATE records SET first_seen_at = (SELECT first_seen_at FROM old_seen WHERE old_seen.id = records.id) "
                                   "WHERE id LIKE ? AND id IN (SELECT id FROM old_seen)", (like,))
                 self.conn.execute("INSERT INTO record_collections SELECT * FROM fresh.record_collections WHERE record_id LIKE ?", (like,))
-                self.conn.execute("INSERT OR IGNORE INTO harvest_runs(source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes) "
-                                  "SELECT source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes FROM fresh.harvest_runs WHERE status='complete'")
+                if import_runs:
+                    self.conn.execute("INSERT INTO harvest_runs(source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes) "
+                                      "SELECT source, kind, started_at, finished_at, status, from_ts, until_ts, pages, records_seen, last_cursor, min_datestamp, resumptions, notes FROM fresh.harvest_runs WHERE status='complete'")
                 n = self.conn.execute("SELECT COUNT(*) FROM records WHERE id LIKE ?", (like,)).fetchone()[0]
         finally:
             self.conn.execute("DETACH DATABASE fresh")
@@ -608,7 +614,8 @@ def normalize_id(record_id: str) -> str:
     return s
 
 
-_PHRASE_RE = re.compile(r'"([^"]+)"|(\S+)')
+_PHRASE_RE = re.compile(r'(?:(\w+):)?(?:"([^"]+)"|(\S+))')
+_FTS_COLUMNS = {"title", "abstract", "subjects", "authors", "report_numbers", "collections", "publisher", "corporate_authors", "alt_title"}
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 
@@ -617,11 +624,14 @@ def tokenize_query(q: str) -> list[str]:
     FTS5 operators/punctuation in user input can't cause syntax errors. A trailing '*'
     on a bare word is kept as a prefix query."""
     terms: list[str] = []
-    for phrase, word in _PHRASE_RE.findall(q or ""):
+    for column, phrase, word in _PHRASE_RE.findall(q or ""):
+        qualifier = f"{column}:" if column in _FTS_COLUMNS else ""
+        if column and not qualifier:
+            word, phrase = column + ":" + (phrase or word), ""
         if phrase:
             p = phrase.replace('"', "").strip()
             if p:
-                terms.append(f'"{p}"')
+                terms.append(qualifier + f'"{p}"')
         elif word:
             w = word.strip()
             if w.upper() in {"AND", "OR", "NOT"}:
@@ -630,5 +640,5 @@ def tokenize_query(q: str) -> list[str]:
             w = w.rstrip("*").replace('"', "")
             if not re.search(r"\w", w):
                 continue
-            terms.append(f'"{w}"' + ("*" if prefix else ""))
+            terms.append(qualifier + f'"{w}"' + ("*" if prefix else ""))
     return terms

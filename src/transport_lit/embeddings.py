@@ -21,6 +21,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Iterable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -195,7 +196,8 @@ class VectorIndex:
         (self.path / "meta.json").write_text(json.dumps(self.meta, indent=1))
         self.vecs = np.load(self.path / "vecs.npy", mmap_mode="r")
 
-    def search(self, q: np.ndarray, k: int = 50, chunk: int = 65536) -> list[tuple[str, float]]:
+    def search(self, q: np.ndarray, k: int = 50, chunk: int = 65536,
+               allowed_ids: set[str] | None = None) -> list[tuple[str, float]]:
         if self.vecs is None or not len(self.ids):
             return []
         q = np.asarray(q, dtype=np.float32)
@@ -205,6 +207,9 @@ class VectorIndex:
         for start in range(0, n, chunk):
             block = np.asarray(self.vecs[start: start + chunk], dtype=np.float32)
             s = block @ q
+            if allowed_ids is not None:
+                allowed = np.array([rid in allowed_ids for rid in self.ids[start: start + chunk]])
+                s[~allowed] = -np.inf
             kk = min(k, len(s))
             idx = np.argpartition(-s, kk - 1)[:kk]
             best_s = np.concatenate([best_s, s[idx]])
@@ -213,7 +218,7 @@ class VectorIndex:
                 keep = np.argpartition(-best_s, k - 1)[:k]
                 best_s, best_i = best_s[keep], best_i[keep]
         order = np.argsort(-best_s)[:k]
-        return [(self.ids[int(best_i[j])], float(best_s[j])) for j in order]
+        return [(self.ids[int(best_i[j])], float(best_s[j])) for j in order if np.isfinite(best_s[j])]
 
 
 def active_index(store: Store) -> VectorIndex | None:
@@ -225,9 +230,15 @@ def active_index(store: Store) -> VectorIndex | None:
 
 def backend_for(index: VectorIndex) -> FastEmbedBackend | OllamaBackend:
     m = index.meta
-    if m.get("backend") == "ollama":
-        return OllamaBackend(m.get("model"), dim=m.get("dim"))
-    return FastEmbedBackend(m.get("model"))
+    return _cached_backend(m.get("backend"), m.get("model"), m.get("dim"))
+
+
+@lru_cache(maxsize=4)
+def _cached_backend(backend: str, model: str, dim: int):
+    # Loading an ONNX model on every MCP search dominates query latency.
+    if backend == "ollama":
+        return OllamaBackend(model, dim=dim)
+    return FastEmbedBackend(model)
 
 
 def embed_records(store: Store, backend: FastEmbedBackend | OllamaBackend, *, rebuild: bool = False,
@@ -281,12 +292,16 @@ def embed_records(store: Store, backend: FastEmbedBackend | OllamaBackend, *, re
             "index_size": len(index), "dim": index.meta.get("dim"), "records_in_store": store.count()}
 
 
-def semantic_candidates(store: Store, query: str, k: int) -> list[tuple[str, float]]:
+def semantic_candidates(store: Store, query: str, k: int, **filters: Any) -> list[tuple[str, float]]:
     index = active_index(store)
     if index is None:
         return []
     backend = backend_for(index)
-    return index.search(backend.embed_query(query), k=k)
+    clauses, params = store._filters(filters.get("year_min"), filters.get("year_max"), filters.get("collection"),
+                                    filters.get("doc_type"), filters.get("sources"))
+    allowed = {r[0] for r in store.conn.execute(f"SELECT r.id FROM records r WHERE 1=1 {clauses}", params)}
+    # Filter before top-k selection so a small source is not hidden by a larger one.
+    return index.search(backend.embed_query(query), k=k, allowed_ids=allowed)
 
 
 SEMANTIC_WEIGHT = float(os.environ.get("TRANSPORT_LIT_SEMANTIC_WEIGHT", "0.7"))  # keyword list weight is 1.0
@@ -334,13 +349,13 @@ def hybrid_search(store: Store, query: str, *, mode: str = "hybrid", limit: int 
         try:
             # a wide pool so diversification has other sources to draw from (dot product is
             # over the whole matrix anyway; only the top-k bookkeeping grows)
-            sem = semantic_candidates(store, query, k=max(want * 10, 300))
+            sem = semantic_candidates(store, query, k=max(want * 10, 300), **filters)
         except Exception as exc:  # noqa: BLE001
             log.warning("semantic search unavailable: %s", exc)
             sem = []
     if not sem:
         if mode == "semantic":
-            return [], "keyword_unavailable" if not keyword else "keyword"
+            return store.search(query, limit=limit, offset=offset, **filters), "keyword"
         return keyword[offset: offset + limit], "keyword"
     sem_ids = store.filter_ids([rid for rid, _ in sem], **filters)
     sem_scores = {rid: sc for rid, sc in sem}

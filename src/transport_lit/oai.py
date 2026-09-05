@@ -152,6 +152,8 @@ class OAIClient:
             root = ET.fromstring(content)
         except ET.ParseError as exc:
             raise TruncatedList(f"response is not well-formed XML: {exc}") from exc
+        if root.tag != f"{{{OAI_NS}}}OAI-PMH":
+            raise TruncatedList("response is not an OAI-PMH envelope")
         err = root.find("oai:error", NS)
         if err is not None:
             code = err.get("code", "unknown")

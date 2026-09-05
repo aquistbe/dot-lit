@@ -20,7 +20,7 @@ except ModuleNotFoundError:  # mcp 1.x
 from . import config
 from .citations import to_bibtex, to_ris
 from .embeddings import active_index, hybrid_search
-from .fulltext import get_fulltext as _get_fulltext
+from .fulltext import direct_pdf_urls, get_fulltext as _get_fulltext
 from .graph import Graph
 from .harvest import status as _status
 from .store import Store, normalize_id
@@ -33,7 +33,8 @@ mcp = FastMCP(
         "Searchable local index of transportation grey literature. Sources (id prefix): "
         "ROSA-P / U.S. DOT National Transportation Library (dot:), VTI Sweden (vti:), BASt Germany (bast:), "
         "World Bank OKR (wbokr:), IPEA Brazil (ipea:), CEPAL (cepal:), plus TRID exports imported by the "
-        "user (trid:). Use the `collection` filter to restrict to one source (e.g. 'VTI', 'BASt', 'World Bank', 'TRID'). "
+        "user (trid:), OpenAlex reports (openalex:), CiNii Research (cinii:), and the PubMed transport subset (pubmed:). "
+        "Use the `collection` filter to restrict to one source (e.g. 'VTI', 'BASt', 'World Bank', 'TRID'). "
         "Use search_reports first; use get_report for full metadata; get_fulltext extracts "
         "PDF text. Search is FTS5 over title/abstract/subjects/authors/report numbers: all "
         "terms must match first (match_mode=all_terms), then any-term matches fill the "
@@ -43,8 +44,8 @@ mcp = FastMCP(
     ),
 )
 
-RO = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
-RO_NET = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
+RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+RO_NET = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
 
 _store: Store | None = None
 
@@ -151,7 +152,9 @@ def get_report(id: str) -> dict[str, Any]:
     rec = store().get_record(id)
     if not rec:
         return {"error": f"no record {normalize_id(id)} in the local index", "id": normalize_id(id)}
-    rec["pdf_url_hint"] = f"{rec['landing_url']}/dot_{rec['id'].split(':')[-1]}_DS1.pdf"
+    pdfs = direct_pdf_urls(rec)
+    rec["pdf_url_hint"] = (f"{config.ROSAP_VIEW_BASE}{rec['id'].split(':')[-1]}/dot_{rec['id'].split(':')[-1]}_DS1.pdf"
+                           if rec["id"].startswith("dot:") else next(iter(pdfs), None))
     ft = store().get_fulltext(rec["id"])
     rec["fulltext_cached"] = bool(ft and ft.get("status") == "ok")
     return rec
@@ -166,6 +169,7 @@ def get_fulltext(id: str, max_chars: int = 40000, offset: int = 0, refresh: bool
     rec = store().get_record(rid)
     ft = _get_fulltext(store(), rid, refresh=refresh)
     text = ft.get("text") or ""
+    offset = max(0, int(offset))
     max_chars = max(1000, min(int(max_chars), 200000))
     chunk = text[offset: offset + max_chars]
     return {
@@ -292,7 +296,12 @@ def main() -> None:
     if a.transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(transport=a.transport, host=a.host, port=a.port)
+        # MCP 1.x configures the listener through settings; 2.x takes run options.
+        if hasattr(mcp, "settings"):
+            mcp.settings.host, mcp.settings.port = a.host, a.port
+            mcp.run(transport=a.transport)
+        else:
+            mcp.run(transport=a.transport, host=a.host, port=a.port)
 
 
 if __name__ == "__main__":

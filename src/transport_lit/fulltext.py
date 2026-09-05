@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -76,14 +78,20 @@ def resolve_pdf_url(record_id: str, client: httpx.Client | None = None) -> dict[
 def _download(url: str, dest: Path, client: httpx.Client) -> int:
     total = 0
     _limiter.wait()
-    with client.stream("GET", url) as r:
-        r.raise_for_status()
-        with dest.open("wb") as fh:
+    # Never leave a partial download at the cache path: subsequent calls reuse it.
+    with tempfile.NamedTemporaryFile(dir=dest.parent, suffix=".part", delete=False) as fh:
+        partial = Path(fh.name)
+    try:
+        with client.stream("GET", url) as r, partial.open("wb") as fh:
+            r.raise_for_status()
             for chunk in r.iter_bytes(1 << 16):
                 total += len(chunk)
                 if total > config.MAX_PDF_BYTES:
                     raise ValueError(f"PDF exceeds MAX_PDF_BYTES ({config.MAX_PDF_BYTES})")
                 fh.write(chunk)
+        partial.replace(dest)
+    finally:
+        partial.unlink(missing_ok=True)
     return total
 
 
@@ -116,6 +124,9 @@ def _extract_text(path: Path) -> tuple[str, int]:
 
 def get_fulltext(store: Store, record_id: str, *, refresh: bool = False) -> dict[str, Any]:
     rid = normalize_id(record_id)
+    rec = store.get_record(rid)
+    if rec is None:
+        return {"record_id": rid, "status": "not_found", "error": "record is not in the local index"}
     cached = store.get_fulltext(rid)
     if cached and not refresh and cached.get("status") in {"ok", "no_pdf", "no_text", "too_large"}:
         return cached
@@ -125,8 +136,7 @@ def get_fulltext(store: Store, record_id: str, *, refresh: bool = False) -> dict
             resolved = resolve_pdf_url(rid, client)
         else:
             # Imported record (e.g. trid:): only a directly linked PDF URL is tried.
-            rec = store.get_record(rid) or {}
-            pdfs = [u for u in (rec.get("other_urls") or []) if u.lower().endswith(".pdf")]
+            pdfs = direct_pdf_urls(rec)
             resolved = {"pdf_url": pdfs[0] if pdfs else None, "content_length": 0}
             if not pdfs:
                 store.put_fulltext(rid, pdf_url=None, status="no_pdf", n_pages=0, n_chars=0, text=None,
@@ -141,7 +151,9 @@ def get_fulltext(store: Store, record_id: str, *, refresh: bool = False) -> dict
             store.put_fulltext(rid, pdf_url=url, status="too_large", n_pages=0, n_chars=0, text=None,
                                error=f"content-length {resolved['content_length']} > {config.MAX_PDF_BYTES}")
             return store.get_fulltext(rid) or {}
-        dest = config.PDF_DIR / f"{rid.replace(':', '_')}.pdf"
+        # IDs from imports may contain slashes or other path characters.
+        import hashlib
+        dest = config.PDF_DIR / (hashlib.sha256(rid.encode()).hexdigest() + ".pdf")
         try:
             if not dest.exists() or refresh:
                 _download(url, dest, client)
@@ -155,3 +167,10 @@ def get_fulltext(store: Store, record_id: str, *, refresh: bool = False) -> dict
     else:
         store.put_fulltext(rid, pdf_url=url, status="ok", n_pages=n_pages, n_chars=len(text), text=text, error=None)
     return store.get_fulltext(rid) or {}
+
+
+def direct_pdf_urls(rec: dict[str, Any]) -> list[str]:
+    """Direct metadata links, including PDF URLs with query parameters."""
+    return [u for u in [*(rec.get("other_urls") or []), rec.get("landing_url")]
+            if isinstance(u, str) and urlsplit(u).scheme in {"http", "https"}
+            and urlsplit(u).path.lower().endswith(".pdf")]

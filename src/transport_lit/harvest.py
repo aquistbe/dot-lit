@@ -29,6 +29,7 @@ Completeness / truncation handling
 from __future__ import annotations
 
 import gzip
+import json
 import logging
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
@@ -218,6 +219,8 @@ def harvest(
                 seen += 1
                 if not d.get("deleted") and not matches_filter(source, d):
                     skipped += 1
+                    # An updated record may no longer pass the source filter.
+                    parsed.append({"id": d["id"], "deleted": True})
                     continue
                 kept += 1
                 parsed.append(d)
@@ -252,6 +255,7 @@ def harvest(
             prev = int(last_full["records_seen"])
             if seen < prev * 0.95:
                 notes.append(f"record count dropped from {prev} to {seen} (>5%): possible silent truncation")
+                return finish("failed")
         say(f"complete: {pages} pages, {seen} records seen, {resumptions} resumptions, store now {store.count()} records")
         return finish("complete")
     except KeyboardInterrupt:
@@ -323,10 +327,11 @@ def reindex_api(store: Store, source: ApiSource, *, progress: Callable[[str], No
         raise RuntimeError(f"no complete full harvest of {source.key} to reindex from")
     runs = [r for r in reversed(store.last_runs(10_000))
             if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == source.key]
+    cached = _cached_pages(runs, source.raw_ext)
     kept: set[str] = set()
     total = files = 0
     for run in runs:
-        for f in sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.{source.raw_ext}.gz")):
+        for f in cached[run["id"]]:
             recs = source.parse(_gzip.decompress(f.read_bytes()))
             store.upsert_records(recs)
             kept.update(r["id"] for r in recs)
@@ -337,76 +342,83 @@ def reindex_api(store: Store, source: ApiSource, *, progress: Callable[[str], No
     return {"runs": [r["id"] for r in runs], "pages": files, "records": total, "pruned": pruned, "total_in_store": store.count()}
 
 
-def harvest_fresh_api(store: Store, source: ApiSource, *, progress: Callable[[str], None] | None = None) -> HarvestResult:
-    say = progress or (lambda m: log.info(m))
-    tmp_path = store.path.with_name(f"{store.path.stem}.rebuild-{source.key}.sqlite")
-    for suffix in ("", "-wal", "-shm"):
-        pth = tmp_path.with_name(tmp_path.name + suffix)
-        if pth.exists():
-            pth.unlink()
-    tmp = Store(tmp_path)
-    try:
-        res = harvest_api(tmp, source, mode="full", progress=say)
-        if res.status != "complete":
-            say("fresh rebuild aborted: harvest did not complete; live index unchanged")
-            return res
-        tmp.close(); tmp = None
-        other = Store(tmp_path)
+def _fresh(store: Store, source: Source | ApiSource, say: Callable[[str], None]) -> HarvestResult:
+    """Reserve a live run ID before staging, so raw cache names never collide."""
+    import tempfile
+    from pathlib import Path
+
+    run_id = store.start_run(source.key, "full", None, utcnow())
+    prefix = "dot" if source.key == "rosap" else source.key
+    with tempfile.TemporaryDirectory(prefix=f"rebuild-{source.key}-", dir=store.path.parent) as work:
+        tmp = Store(Path(work) / "index.sqlite")
         try:
-            n = store.replace_source(source.key, other)
+            tmp.conn.execute("INSERT INTO sqlite_sequence(name, seq) VALUES ('harvest_runs', ?)", (run_id - 1,))
+            tmp.conn.commit()
+            if isinstance(source, ApiSource):
+                res = harvest_api(tmp, source, mode="full", progress=say)
+            else:
+                res = harvest(tmp, source=source, mode="full", progress=say)
+            staged = tmp.get_run(res.run_id)
+            if res.status == "complete":
+                old_count = store.conn.execute("SELECT COUNT(*) FROM records WHERE id LIKE ?", (prefix + ":%",)).fetchone()[0]
+                new_count = tmp.count()
+                if old_count and new_count < old_count * 0.95:
+                    res.status = "failed"
+                    res.notes.append(f"fresh rebuild refused: record count dropped from {old_count} to {new_count} (>5%); live index unchanged")
+                else:
+                    store.replace_source(prefix, tmp, import_runs=False)
+            fields = {k: staged[k] for k in ("from_ts", "until_ts", "pages", "records_seen", "last_cursor", "min_datestamp", "resumptions")}
+            store.update_run(run_id, **fields, status=res.status, finished_at=res.finished_at, notes=res.notes)
+            if res.status == "complete":
+                store.set_meta(f"last_harvest_finished_at:{source.key}", res.finished_at)
+                store.set_meta(f"last_full_harvest_finished_at:{source.key}", res.finished_at)
+                if source.key == "rosap":
+                    store.set_meta("last_harvest_finished_at", res.finished_at)
+                    store.set_meta("last_full_harvest_finished_at", res.finished_at)
+            res.total_in_store = store.count()
+            say(f"fresh rebuild {res.status}: {source.key}; store has {res.total_in_store} records")
+            return res
+        except BaseException:
+            store.update_run(run_id, status="failed", finished_at=utcnow(), notes=["fresh rebuild interrupted or failed during staging/swap"])
+            raise
         finally:
-            other.close()
-        say(f"fresh rebuild swapped in {n} {source.key} records; store now {store.count()} records")
-        res.total_in_store = store.count()
-        return res
-    finally:
-        if tmp is not None:
             tmp.close()
-        for suffix in ("", "-wal", "-shm"):
-            pth = tmp_path.with_name(tmp_path.name + suffix)
-            if pth.exists():
-                pth.unlink()
+
+
+def harvest_fresh_api(store: Store, source: ApiSource, *, progress: Callable[[str], None] | None = None) -> HarvestResult:
+    return _fresh(store, source, progress or (lambda m: log.info(m)))
 
 
 def harvest_fresh(store: Store, *, source: Source | None = None, progress: Callable[[str], None] | None = None) -> HarvestResult:
-    """True rebuild: full-harvest ROSA-P into a temporary store, then atomically swap the
-    `dot:` records into the live store.  Records that ROSA-P no longer serves disappear;
-    imported sources (e.g. trid:) are untouched; a failed harvest changes nothing."""
-    say = progress or (lambda m: log.info(m))
-    source = source or SOURCES["rosap"]
-    tmp_path = store.path.with_name(f"{store.path.stem}.rebuild-{source.key}.sqlite")
-    for suffix in ("", "-wal", "-shm"):
-        p = tmp_path.with_name(tmp_path.name + suffix)
-        if p.exists():
-            p.unlink()
-    tmp = Store(tmp_path)
-    try:
-        res = harvest(tmp, source=source, mode="full", progress=say)
-        if res.status != "complete":
-            say("fresh rebuild aborted: harvest did not complete; live index unchanged")
-            return res
-        tmp.close()
-        tmp = None
-        other = Store(tmp_path)
-        try:
-            n = store.replace_source("dot" if source.key == "rosap" else source.key, other)
-        finally:
-            other.close()
-        store.set_meta(f"last_harvest_finished_at:{source.key}", res.finished_at)
-        store.set_meta(f"last_full_harvest_finished_at:{source.key}", res.finished_at)
-        if source.key == "rosap":
-            store.set_meta("last_harvest_finished_at", res.finished_at)
-            store.set_meta("last_full_harvest_finished_at", res.finished_at)
-        say(f"fresh rebuild swapped in {n} {source.key} records; store now {store.count()} records")
-        res.total_in_store = store.count()
-        return res
-    finally:
-        if tmp is not None:
-            tmp.close()
-        for suffix in ("", "-wal", "-shm"):
-            p = tmp_path.with_name(tmp_path.name + suffix)
-            if p.exists():
-                p.unlink()
+    return _fresh(store, source or SOURCES["rosap"], progress or (lambda m: log.info(m)))
+
+
+def _cached_pages(runs: list[dict], ext: str) -> dict[int, list]:
+    """Preflight the entire cache before any upserts or pruning."""
+    out = {}
+    for run in runs:
+        files = sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.{ext}.gz"))
+        expected = [config.RAW_DIR / f"run{run['id']}-p{i:05d}.{ext}.gz" for i in range(run["pages"])]
+        if ext == "xml" and run["pages"] == 0 and len(files) == 1:
+            # OAI saves the response before interpreting noRecordsMatch. A valid
+            # no-change attempt can therefore have one envelope and zero data pages.
+            root = ET.fromstring(gzip.decompress(files[0].read_bytes()))
+            error = root.find(f"{{{OAI_NS}}}error")
+            if (root.tag == f"{{{OAI_NS}}}OAI-PMH" and not root.findall(f".//{{{OAI_NS}}}record")
+                    and root.find(f"{{{OAI_NS}}}ListRecords") is None
+                    and (error is None or error.get("code") == "noRecordsMatch")):
+                files = []
+        if files != expected:
+            raise RuntimeError(f"cannot reindex run {run['id']}: expected {run['pages']} cached pages, found {len(files)} (missing or unexpected pages); index unchanged")
+        # Reject unreadable/corrupt pages before records can be pruned.
+        for path in files:
+            raw = gzip.decompress(path.read_bytes())
+            if ext == "xml":
+                ET.fromstring(raw)
+            else:
+                json.loads(raw)
+        out[run["id"]] = files
+    return out
 
 
 def reindex(store: Store, *, source: Source | None = None, progress: Callable[[str], None] | None = None) -> dict:
@@ -419,13 +431,12 @@ def reindex(store: Store, *, source: Source | None = None, progress: Callable[[s
         raise RuntimeError(f"no complete full harvest of {source.key} to reindex from")
     runs = [r for r in reversed(store.last_runs(10_000))
             if r["status"] == "complete" and r["id"] >= last_full["id"] and r["source"] == source.key]
+    cached = _cached_pages(runs, "xml")
     total = 0
     files_seen = 0
     kept_ids: set[str] = set()
     for run in runs:
-        files = sorted(config.RAW_DIR.glob(f"run{run['id']}-p*.xml.gz"))
-        if len(files) != run["pages"]:
-            say(f"warning: run {run['id']} has {len(files)} cached pages but recorded {run['pages']}")
+        files = cached[run["id"]]
         for f in files:
             root = ET.fromstring(gzip.decompress(f.read_bytes()))
             recs = [d for d in (parse_record(r, source.key, source.collection) for r in root.findall(f".//{{{OAI_NS}}}record"))
@@ -455,9 +466,12 @@ def status(store: Store) -> dict:
     dist = store.source_distribution()
     for key, src in list(SOURCES.items()) + list(API_SOURCES.items()):
         lc = store.last_complete_run(key)
+        latest_row = store.conn.execute("SELECT * FROM harvest_runs WHERE source=? ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+        latest = store._run_row(latest_row) if latest_row else None
         per_source[key] = {
             "name": src.name, "base_url": getattr(src, "base_url", "api"),
             "records": dist.get("dot" if key == "rosap" else key, 0),
+            "latest_run": {k: latest[k] for k in ("id", "kind", "status", "started_at", "finished_at", "records_seen", "pages", "notes")} if latest else None,
             "last_complete_run": {k: lc[k] for k in ("id", "kind", "finished_at", "records_seen", "pages", "notes")} if lc else None,
         }
     return {

@@ -60,8 +60,14 @@ def _get(client: Client, limiter: RateLimiter, url: str, params: dict | None = N
             return r.content
         except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             last = exc
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in (429, 500, 502, 503, 504):
+                # Fail fast without logging query strings containing application/API keys.
+                raise RuntimeError(f"GET {url}: HTTP {exc.response.status_code}") from None
+            if attempt == retries:
+                break
             time.sleep(min(3.0 * (attempt + 1), 20.0))
-    raise RuntimeError(f"GET {url} failed after retries: {last}")
+    detail = f"HTTP {last.response.status_code}" if isinstance(last, httpx.HTTPStatusError) else type(last).__name__
+    raise RuntimeError(f"GET {url} failed after retries: {detail}") from None
 
 
 def _base(rid: str, title: str, *, year: int | None, authors: list[str], abstract: str, doi: str,
@@ -98,15 +104,23 @@ _OA_SELECT = ("id,doi,title,display_name,publication_year,type,language,authorsh
 
 
 def openalex_pages(client: Client, since: str | None, say: Callable[[str], None]) -> Iterator[tuple[str, bytes]]:
-    limiter = RateLimiter(0.2)  # OpenAlex polite pool allows ~10 r/s; we use 5
+    limiter = RateLimiter(float(config._env("OPENALEX_INTERVAL", "0.25")))
     flt = f"type:{OPENALEX_TYPES},primary_topic.id:{'|'.join(OPENALEX_TOPICS)}"
-    if since:
+    if since and config._env("OPENALEX_USE_UPDATED_FILTER", "0") == "1":
         flt += f",from_updated_date:{since[:10]}"
+    elif since:
+        # Updated-date filtering requires a paid plan. Re-read this small subset so
+        # newly indexed older reports and metadata corrections are still captured.
+        say("openalex: refreshing the full query subset (updated-date filter requires a paid plan)")
     cursor = "*"
     n = 0
     while cursor:
-        params = {"filter": flt, "per-page": 200, "cursor": cursor, "select": _OA_SELECT,
-                  "mailto": config.CONTACT_EMAIL or "transport-lit@example.invalid"}
+        params = {"filter": flt, "per-page": 100, "cursor": cursor, "select": _OA_SELECT}
+        if config.CONTACT_EMAIL:
+            params["mailto"] = config.CONTACT_EMAIL
+        key = config._env("OPENALEX_API_KEY") or os.environ.get("OPENALEX_API_KEY", "")
+        if key:
+            params["api_key"] = key
         raw = _get(client, limiter, "https://api.openalex.org/works", params)
         d = json.loads(raw)
         if n == 0:
@@ -252,7 +266,7 @@ def pubmed_pages(client: Client, since: str | None, say: Callable[[str], None]) 
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
     term = pubmed_term()
     if since:
-        term = f"({term}) AND (\"{since[:10].replace('-', '/')}\"[edat] : \"3000\"[edat])"
+        term = f"({term}) AND (\"{since[:10].replace('-', '/')}\"[mdat] : \"3000\"[mdat])"
 
     def esearch(t: str, history: bool) -> dict:
         params = {"db": "pubmed", "term": t, "retmax": 0, "retmode": "json"}
@@ -273,7 +287,9 @@ def pubmed_pages(client: Client, since: str | None, say: Callable[[str], None]) 
         n = int(esearch(t, False)["count"])
         if n == 0:
             return
-        if n <= PUBMED_SLICE_MAX or lo == hi:
+        if lo == hi and n > PUBMED_SLICE_MAX:
+            raise RuntimeError(f"PubMed date slice {lo} has {n} records, exceeding the retrieval cap; narrow TRANSPORT_LIT_PUBMED_TERM")
+        if n <= PUBMED_SLICE_MAX:
             slices.append((lo, hi, n))
             return
         mid = lo + (hi - lo) // 2
@@ -291,7 +307,10 @@ def pubmed_pages(client: Client, since: str | None, say: Callable[[str], None]) 
                  "retmode": "xml"}
             if key:
                 p["api_key"] = key
-            yield f"p{page:05d}", _get(client, limiter, base + "efetch.fcgi", p)
+            raw = _get(client, limiter, base + "efetch.fcgi", p)
+            if not pubmed_parse(raw):
+                raise RuntimeError("PubMed returned no articles for a nonempty date slice; harvest is incomplete")
+            yield f"p{page:05d}", raw
             page += 1
 
 
@@ -301,6 +320,9 @@ def _txt(el: ET.Element | None) -> str:
 
 def pubmed_parse(raw: bytes) -> list[dict[str, Any]]:
     root = ET.fromstring(raw)
+    error = root.find(".//ERROR")
+    if root.tag != "PubmedArticleSet" or error is not None:
+        raise ValueError("PubMed returned an error or unexpected XML instead of article records")
     out = []
     for art in root.findall(".//PubmedArticle"):
         pmid = _txt(art.find(".//PMID"))
@@ -318,9 +340,9 @@ def pubmed_parse(raw: bytes) -> list[dict[str, Any]]:
                 authors.append(coll)
         journal = _txt(a.find(".//Journal/Title"))
         yr = _txt(a.find(".//Journal/JournalIssue/PubDate/Year")) or _txt(a.find(".//Journal/JournalIssue/PubDate/MedlineDate"))[:4]
-        doi = next((_txt(e) for e in art.findall(".//ArticleId") if e.get("IdType") == "doi"), "") or \
+        doi = next((_txt(e) for e in art.findall("PubmedData/ArticleIdList/ArticleId") if e.get("IdType") == "doi"), "") or \
               next((_txt(e) for e in a.findall("ELocationID") if e.get("EIdType") == "doi"), "")
-        pmc = next((_txt(e) for e in art.findall(".//ArticleId") if e.get("IdType") == "pmc"), "")
+        pmc = next((_txt(e) for e in art.findall("PubmedData/ArticleIdList/ArticleId") if e.get("IdType") == "pmc"), "")
         mesh = [_txt(m.find("DescriptorName")) for m in art.findall(".//MeshHeading")]
         ptypes = [_txt(p) for p in a.findall(".//PublicationTypeList/PublicationType")]
         lang = _txt(a.find("Language"))
